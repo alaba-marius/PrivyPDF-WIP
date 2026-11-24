@@ -2159,3 +2159,224 @@ a:hover {
   }
   .ds-hero-sheet { height: 96px; }
 }
+
+/* --- Editor options panel: disclosure, switch, select, fields, swatches --- */
+
+.ds-disclosure {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.ds-disclosure-trigger {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 0;
+  background: var(--color-surface-muted);
+  color: var(--color-graphite);
+  font-weight: 550;
+  font-size: 14px;
+  font-family: var(--font-google-sans-flex);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ds-disclosure-trigger:hover {
+  background: var(--color-border-soft);
+}
+
+.ds-disclosure-trigger[aria-expanded="true"] {
+  background: #fff;
+}
+
+.ds-disclosure-trigger .ds-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.ds-disclosure-content {
+  padding: 0 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Toggle switch (role="switch", driven by aria-checked). */
+.ds-switch {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  border-radius: 9999px;
+  border: 1px solid var(--color-border-input);
+  background: #fff;
+  cursor: pointer;
+  padding: 0;
+}
+
+.ds-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid var(--color-border-input);
+}
+
+.ds-switch[aria-checked="true"] {
+  background: var(--color-electric-capture-blue);
+  border-color: var(--color-electric-capture-blue);
+}
+
+.ds-switch[aria-checked="true"]::after {
+  transform: translateX(20px);
+}
+
+.ds-switch:focus-visible {
+  outline: 2px solid var(--color-graphite);
+  outline-offset: 2px;
+}
+
+/* Native select, styled. */
+.ds-select {
+  height: 44px;
+  border-radius: 14px;
+  border: 1px solid var(--color-border-input);
+  padding: 0 14px;
+  font-size: 15px;
+  font-family: var(--font-google-sans-flex);
+  color: var(--color-absolute-ink);
+  background: #fff;
+  cursor: pointer;
+  appearance: none;
+  width: 100%;
+}
+
+/* Form fields inside disclosures. */
+.ds-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ds-field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ds-field-label {
+  font-weight: 550;
+  font-size: 13px;
+  line-height: 16px;
+  color: var(--color-soft-charcoal);
+}
+
+.ds-field-hint {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--color-soft-charcoal);
+}
+
+.ds-field-error {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--color-danger);
+}
+
+.ds-input[type="range"] {
+  height: auto;
+  padding: 0;
+  border: none;
+  background: none;
+  width: 100%;
+  cursor: pointer;
+}
+
+.ds-input[type="range"]::-webkit-slider-thumb {
+  width: 16px;
+  height: 16px;
+  background: var(--color-graphite);
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  appearance: none;
+}
+
+/* Color swatches for the watermark color. ds-swatch already exists in the
+   design-system style guide, so these carry their own name. */
+.ds-color-swatch-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ds-color-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border-input);
+  cursor: pointer;
+  padding: 0;
+}
+
+.ds-color-swatch[data-color="gray"] { background: #6a6a6b; }
+.ds-color-swatch[data-color="black"] { background: #000; }
+.ds-color-swatch[data-color="red"] { background: var(--color-danger); }
+.ds-color-swatch[data-color="blue"] { background: var(--color-electric-capture-blue); }
+.ds-color-swatch[data-color="green"] { background: #15803d; }
+
+.ds-color-swatch[aria-checked="true"] {
+  outline: 2px solid var(--color-graphite);
+  outline-offset: 2px;
+}
+
+/* --- Preview dialog --- */
+
+.ds-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(16, 16, 20, 0.35);
+}
+
+.ds-modal::backdrop {
+  background: rgba(16, 16, 20, 0.35);
+}
+
+.ds-modal-content {
+  background: #fff;
+  border-radius: 14px;
+  max-width: min(440px, 92vw);
+  max-height: 82vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 24px;
+  position: relative;
+}
+
+#preview-canvas {
+  max-width: 100%;
+  max-height: 60vh;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 10px;
+  background: #fff;
+  display: block;
+}

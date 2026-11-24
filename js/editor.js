@@ -18,8 +18,11 @@ import {
   moveSelected,
 } from "./core/pages.js";
 import { createSourceLoader } from "./core/source-loader.js";
-import { createExporter } from "./core/exporter.js";
+import { createExporter, sanitizeName } from "./core/exporter.js";
 import { extractFileName } from "./core/extract-name.js";
+import { extractTitle } from "./core/pdf-title.js";
+import { planSplit, formatPartName, formatZipName } from "./core/split-plan.js";
+import { writeZip } from "./core/zip.js";
 import { fitSize } from "./core/card-view.js";
 import { createSource, getSource, removeSource, totalBytes } from "./core/sources.js";
 import { mountDropzone } from "./ui/dropzone.js";
@@ -85,6 +88,12 @@ const store = createStore(
     totalSize: 0,
     size: "large",
     exportMode: "all",
+    exportOptions: {
+      pageNumbers: { mode: "none", format: "n", skipFirst: false },
+      watermark: { text: "", color: "gray", angle: 0, opacity: 30 },
+      metadata: { title: "", author: "" },
+      split: { mode: "every", every: 1, ranges: "" },
+    },
   },
   { track: ["pages"] },
 );
@@ -251,6 +260,27 @@ async function handleFiles(fileList) {
     pages,
     selected: [],
   });
+  // When exactly one source was added and it is a PDF, pre-fill the metadata
+  // title from the file — but only while the field is still untouched.
+  if (
+    addedSourceFiles.length === 1 &&
+    addedSourceFiles[0].type === "application/pdf" &&
+    !state.exportOptions.metadata.title
+  ) {
+    const source = getSource(addedSourceFiles[0].id);
+    if (source) {
+      const title = extractTitle(source.bytes);
+      if (title) {
+        store.patch({
+          exportOptions: {
+            ...state.exportOptions,
+            metadata: { ...state.exportOptions.metadata, title },
+          },
+        });
+      }
+    }
+  }
+
   focusedId = pages[0]?.id ?? null;
   anchorId = null;
 }
@@ -390,17 +420,60 @@ async function exportDocument(mode) {
     return;
   }
   try {
+    const options = state.exportOptions;
+    if (mode === "split") {
+      await exportSplit(state);
+      return;
+    }
     const { name, bytes } = await exporter.exportPages({
       pages: state.pages,
       getSource,
       fileName: state.fileName,
       exportMode: mode,
       selected: new Set(state.selected),
+      pageNumbers: options.pageNumbers,
+      watermark: options.watermark,
+      metadata: options.metadata,
     });
     await downloadBytes(name, bytes);
   } catch (error) {
     toast(`Export failed: ${error.message}`, { type: "error" });
   }
+}
+
+// Split the document into parts and download them as one ZIP. Parts never
+// touch the document, the selection or the undo history.
+async function exportSplit(state) {
+  const options = state.exportOptions;
+  const plan = planSplit(options.split.mode, state.pages.length, {
+    every: options.split.every,
+    ranges: options.split.ranges,
+  });
+  if (plan.error) {
+    toast(plan.error, { type: "error" });
+    return;
+  }
+  const parts = [];
+  for (let p = 0; p < plan.parts.length; p++) {
+    const part = plan.parts[p];
+    const pages = state.pages.slice(part.start - 1, part.end);
+    const { name, bytes } = await exporter.exportPages({
+      pages,
+      getSource,
+      fileName: state.fileName,
+      exportMode: "all",
+      selected: new Set(),
+      pageNumbers: options.pageNumbers,
+      watermark: options.watermark,
+      metadata: options.metadata,
+    });
+    parts.push({
+      name: formatPartName(sanitizeName(state.fileName), p + 1, plan.parts.length, part),
+      bytes,
+    });
+  }
+  const zipBytes = writeZip(parts);
+  await downloadBytes(formatZipName(sanitizeName(state.fileName)), zipBytes);
 }
 
 // Download the selected pages as their own PDF, in the current order, without
@@ -412,9 +485,10 @@ async function extractSelected() {
     toast("Select the pages to extract first.", { type: "error" });
     return;
   }
+  const sel = new Set(state.selected);
   const positions = state.pages
     .map((page, index) => index + 1)
-    .filter((_, index) => state.selected.has(state.pages[index].id));
+    .filter((_, index) => sel.has(state.pages[index].id));
   try {
     const { name, bytes } = await exporter.exportPages({
       pages: state.pages,
@@ -427,6 +501,55 @@ async function extractSelected() {
   } catch (error) {
     toast(`Export failed: ${error.message}`, { type: "error" });
   }
+}
+
+// Preview the first page with the current options applied, in a modal dialog.
+// Nothing is downloaded.
+async function previewFirstPage() {
+  const state = getState();
+  const page = state.pages[0];
+  if (!page) return;
+  try {
+    const { bytes } = await exporter.exportPages({
+      pages: [page],
+      getSource,
+      fileName: state.fileName,
+      exportMode: "all",
+      selected: new Set(),
+      pageNumbers: state.exportOptions.pageNumbers,
+      watermark: state.exportOptions.watermark,
+      metadata: state.exportOptions.metadata,
+    });
+    await showPreview(bytes);
+  } catch (error) {
+    toast(`Preview failed: ${error.message}`, { type: "error" });
+  }
+}
+
+// Render one exported page into the preview canvas and open the dialog.
+// pdf.js draws the page exactly as it will be exported (/Rotate included).
+async function showPreview(bytes) {
+  await loadPdfJs();
+  const doc = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
+  const page = await doc.getPage(1);
+  let viewport = page.getViewport({ scale: 1 });
+  const scale = Math.min(1, 360 / viewport.width);
+  viewport = page.getViewport({ scale });
+  const canvas = $("preview-canvas");
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const ctx = canvas.getContext("2d");
+  await page.render({ canvasContext: ctx, viewport }).promise;
+
+  const dialog = $("preview-dialog");
+  const button = $("btn-preview");
+  function closePreview() {
+    dialog.close();
+    button.focus();
+  }
+  $("preview-close").addEventListener("click", closePreview, { once: true });
+  dialog.addEventListener("close", () => button.focus(), { once: true });
+  dialog.showModal();
 }
 
 // ---------- Wiring ----------
@@ -581,6 +704,16 @@ const panel = mountPanel($("right-panel"), {
     store.patch({ exportMode: mode });
   },
   onDownloadPDF: () => exportDocument(getState().exportMode),
+  onSplitPDF: () => exportSplit(getState()),
+  onPreview: previewFirstPage,
+  onExportOptionsChange: (patch) => {
+    const state = getState();
+    const next = { ...state.exportOptions };
+    for (const [key, value] of Object.entries(patch)) {
+      next[key] = { ...next[key], ...value };
+    }
+    store.patch({ exportOptions: next });
+  },
   onSourceRemove: (sourceId) => removeSourceFile(sourceId),
 });
 

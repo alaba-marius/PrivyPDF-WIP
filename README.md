@@ -45,7 +45,8 @@ The editor opens empty (`/editor.html#demo` behaves the same as `/editor.html`).
 ### What is not implemented yet
 
 Annotate, Text, Sign and Protect are marked Soon (not yet built). Organize pages,
-Merge PDFs, Images to PDF and Extract pages are live in the editor.
+Merge PDFs, Images to PDF and Extract pages are live in the editor, and the editor's
+Options add page numbers, watermark, metadata, preview and split-to-ZIP to every export.
 
 ### Security headers
 
@@ -112,10 +113,13 @@ Open `/editor.html` with a real PDF (for example one of `tests/fixtures/one-page
 | 18 | Rail Merge | Click the "Merge" rail item, choose several PDFs in the file chooser (PDF files only); their pages append in order; Download builds one PDF from all pages. |
 | 19 | Rail Images | Click the "Images" rail item, choose JPG/PNG files; each image becomes one page; Download builds a PDF from them. |
 | 20 | Rail / float Extract | Select one or more pages, then click "Extract" in the rail or the float bar; a file named "<doc name>-pages-<ranges>.pdf" (ranges like "3-5_9", stem truncated to 40 characters then "-etc") downloads containing exactly the selected pages. |
-| 21 | Rotate 90° | Select pages and press R (or click Rotate); selected sheets rotate 90°, unselected pages stay upright, and export applies the user rotation on top of each file's own /Rotate. |
-| 22 | Export metadata | Open the exported PDF's metadata; Producer and Creator both read "PrivyPDF". |
-| 23 | Window at ~900px | The Details toggle opens the right panel as a slide-out drawer; Escape or clicking the scrim closes it. |
-| 19 | Window at 375px | No horizontal page scroll; the rail is a bottom bar; every control is at least 44×44px. |
-| 20 | Window at 1280px | The rail, page area and right panel sit side by side; opening Details shows the right panel inline beside the grid (no drawer). |
+| 21 | Page numbers | Open Options > Page numbers, choose "n-of-total" and export; every exported page shows its number bottom-center, upright even on rotated pages. |
+| 22 | Watermark | Open Options > Watermark, type text, pick color/angle/opacity and export; the watermark is centred on each page, angled and at most 80% of page width. Invalid characters are rejected. |
+| 23 | Metadata | Open Options > Metadata, set title and author, export; the exported PDF's Title and Author match. Producer and Creator both read "PrivyPDF". |
+| 24 | Preview | Click Preview in Options; the first page renders in the dialog canvas; closing the dialog dismisses it. |
+| 25 | Split | Open Options > Split, choose "every 2 pages" or custom ranges, click Split; a "<name>-parts.zip" downloads containing one PDF per part. |
+| 26 | Window at ~900px | The Details toggle opens the right panel as a slide-out drawer; Escape or clicking the scrim closes it. |
+| 27 | Window at 375px | No horizontal page scroll; the rail is a bottom bar; every control is at least 44×44px. |
+| 28 | Window at 1280px | The rail, page area and right panel sit side by side; opening Details shows the right panel inline beside the grid (no drawer). |
 
-Steps 21–23 require resizing the viewport; steps 1–20 can be run in one session. Browser verification was not run in this session (see REPORT.md).
+Steps 26–28 require resizing the viewport; steps 1–25 can be run in one session. Browser verification was not run in this session (see REPORT.md).

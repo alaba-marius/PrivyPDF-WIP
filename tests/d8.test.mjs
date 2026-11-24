@@ -51,7 +51,7 @@ test("no shipped page contains the removed copy", () => {
   }
 });
 
-test("the four live tool cards have no Soon badge", () => {
+test("the six live tool cards have no Soon badge", () => {
   const html = pages["index.html"];
   const start = html.indexOf('<div class="ds-tools-grid">');
   assert.ok(start !== -1, "index.html has a tools grid");
@@ -61,8 +61,13 @@ test("the four live tool cards have no Soon badge", () => {
   assert.ok(/<span class="ds-tool-title">Merge PDFs<\/span>/.test(grid), "Merge PDFs card");
   assert.ok(/<span class="ds-tool-title">Images to PDF<\/span>/.test(grid), "Images to PDF card");
   assert.ok(/<span class="ds-tool-title">Extract pages<\/span>/.test(grid), "Extract pages card");
+  assert.ok(/<span class="ds-tool-title">Split PDF<\/span>/.test(grid), "Split PDF card");
+  assert.ok(
+    /<span class="ds-tool-title">Page numbers &amp; watermark<\/span>/.test(grid),
+    "Page numbers &amp; watermark card",
+  );
   assert.ok(!/Extract\s*&\s*split/.test(grid), "the 'Extract & split' name is gone");
-  assert.ok(!/ds-tools-grid[\s\S]{0,2000}?ds-badge-soon/.test(grid), "no Soon badge on the four live tool cards");
+  assert.ok(!/ds-tools-grid[\s\S]{0,2000}?ds-badge-soon/.test(grid), "no Soon badge on the six live tool cards");
   // Annotate and Compress & protect stay Soon.
   assert.ok(/<span class="ds-tool-title">Annotate<\/span>/.test(grid));
   assert.ok(/<span class="ds-tool-title">Compress &amp; protect<\/span>/.test(grid));
@@ -86,6 +91,9 @@ test("tool descriptions match the real behavior", () => {
   assert.ok(/Add several PDFs, put the pages in order and download one file\./.test(html));
   assert.ok(/Add JPG or PNG photos or scans and each one becomes a page\./.test(html));
   assert.ok(/Select pages and download them as a separate PDF\./.test(html));
+  assert.ok(/Split by page count or custom page ranges and download the parts as one ZIP\./.test(html));
+  assert.ok(/Add page numbers or a watermark, set the title and author, then download\./.test(html));
+  assert.ok(/Shrink file size and protect a file with a password\./.test(html));
   assert.ok(
     /Select, rotate, duplicate and delete pages, drag them into a new order and undo any step\./.test(html),
   );
