@@ -2336,6 +2336,23 @@ a:hover {
 .ds-color-swatch[data-color="blue"] { background: var(--color-electric-capture-blue); }
 .ds-color-swatch[data-color="green"] { background: #15803d; }
 
+/* Annotate mode custom highlight and text colors */
+.ds-color-swatch[data-color="#ffe14d"] { background: #ffe14d; }
+.ds-color-swatch[data-color="#ffcccc"] { background: #ffcccc; }
+.ds-color-swatch[data-color="#ccffcc"] { background: #ccffcc; }
+.ds-color-swatch[data-color="#ccccff"] { background: #ccccff; }
+.ds-color-swatch[data-color="#ffffcc"] { background: #ffffcc; }
+.ds-color-swatch[data-color="#ffccff"] { background: #ffccff; }
+.ds-color-swatch[data-color="#ccffff"] { background: #ccffff; }
+.ds-color-swatch[data-color="#000000"] { background: #000000; }
+.ds-color-swatch[data-color="#ffffff"] { background: #ffffff; border-color: var(--color-border-input); }
+.ds-color-swatch[data-color="#ff0000"] { background: #ff0000; }
+.ds-color-swatch[data-color="#0066ff"] { background: #0066ff; }
+.ds-color-swatch[data-color="#00aa00"] { background: #00aa00; }
+.ds-color-swatch[data-color="#ff8800"] { background: #ff8800; }
+.ds-color-swatch[data-color="#aa00aa"] { background: #aa00aa; }
+.ds-color-swatch[data-color="#00aaaa"] { background: #00aaaa; }
+
 .ds-color-swatch[aria-checked="true"] {
   outline: 2px solid var(--color-graphite);
   outline-offset: 2px;
@@ -2352,6 +2369,10 @@ a:hover {
   justify-content: center;
   padding: 24px;
   background: rgba(16, 16, 20, 0.35);
+}
+
+.ds-modal:not([open]) {
+  display: none;
 }
 
 .ds-modal::backdrop {

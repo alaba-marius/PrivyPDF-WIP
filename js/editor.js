@@ -6,6 +6,25 @@ import { takeFiles, pickFiles, validateFiles, downloadBytes, baseName } from "./
 import { toast } from "./toast.js";
 import { createStore } from "./core/store.js";
 import { installErrorHandler, setToast } from "./core/errors.js";
+import {
+  addAnnotation,
+  updateAnnotation,
+  deleteAnnotation,
+  moveAnnotation,
+  nudgeAnnotation,
+  duplicatePageAnnotations,
+  deletePageAnnotations,
+  getAnnotationCount,
+  createTextAnnotation,
+  createHighlightAnnotation,
+  DEFAULT_TEXT_FONT_SIZE,
+  DEFAULT_TEXT_COLOR,
+  DEFAULT_HIGHLIGHT_COLOR,
+  DEFAULT_HIGHLIGHT_OPACITY,
+  toJSON,
+  fromJSON,
+  clear as clearAnnotations,
+} from "./core/annotations.js";
 import { startPrivacyMeter, subscribe as subscribeMeter } from "./core/privacy-meter.js";
 import { registerShortcuts } from "./core/shortcuts.js";
 import {
@@ -25,11 +44,13 @@ import { planSplit, formatPartName, formatZipName } from "./core/split-plan.js";
 import { writeZip } from "./core/zip.js";
 import { fitSize } from "./core/card-view.js";
 import { createSource, getSource, removeSource, totalBytes } from "./core/sources.js";
+import { visibilityFor } from "./core/visibility.js";
 import { mountDropzone } from "./ui/dropzone.js";
 import { mountGrid, buildSkeletons } from "./ui/cards.js";
 import { mountPanel } from "./ui/panel.js";
 import { mountSubToolbar, mountFloatBar } from "./ui/toolbar.js";
 import { mountDrawer } from "./ui/drawer.js";
+import { mountAnnotateView } from "./ui/annotate-view.js";
 
 installErrorHandler();
 setToast(toast);
@@ -80,7 +101,8 @@ const exporter = createExporter();
 
 const store = createStore(
   {
-    mode: "empty",
+    mode: "empty", // content state: "empty" | "loading" | "loaded"
+    view: "pages", // UI mode: "pages" | "annotate"
     fileName: "No document",
     pages: [],
     selected: [],
@@ -94,9 +116,26 @@ const store = createStore(
       metadata: { title: "", author: "" },
       split: { mode: "every", every: 1, ranges: "" },
     },
+    annotations: {},
+    // Annotate view settings (persisted in store for panel sync)
+    annotateFontSize: 12,
+    annotateTextColor: "#000000",
+    annotateHighlightColor: "#ffe14d",
+    annotateHighlightOpacity: 0.4,
   },
-  { track: ["pages"] },
+  { track: ["pages", "annotations"] },
 );
+
+// Static guard: only allow "empty" | "loading" | "loaded" for store.mode
+// Fail fast if "pages" or "annotate" are accidentally assigned to mode.
+function assertValidMode(value, location) {
+  if (value === "pages" || value === "annotate") {
+    throw new Error(`Invalid mode "${value}" at ${location} — mode must be "empty" | "loading" | "loaded", not a view.`);
+  }
+  if (value !== "empty" && value !== "loading" && value !== "loaded") {
+    throw new Error(`Invalid mode "${value}" at ${location} — mode must be "empty" | "loading" | "loaded".`);
+  }
+}
 
 function recomputeNextPageCounter() {
   let max = 0;
@@ -108,7 +147,8 @@ function recomputeNextPageCounter() {
 }
 
 function getState() {
-  return { ...store.get(), focusedId };
+  const state = store.get();
+  return { ...state, focusedId, annotations: state.annotations || {} };
 }
 
 function announceStatus(message) {
@@ -126,8 +166,8 @@ function announceMove() {
   announceStatus(`Page moved to position ${position} of ${state.pages.length}`);
 }
 
-function renderAll() {
-  const state = getState();
+function renderAll(stateArg) {
+  const state = stateArg ?? getState();
 
   // Keep roving focus and the range anchor on pages that still exist.
   const ids = new Set(state.pages.map((page) => page.id));
@@ -140,9 +180,12 @@ function renderAll() {
 
   $("file-name").textContent = state.fileName;
 
-  $("empty-state").hidden = state.mode !== "empty";
-  $("loading-state").hidden = state.mode !== "loading";
-  $("page-grid").hidden = state.mode !== "loaded";
+  // Use pure visibility function
+  const vis = visibilityFor(state);
+  $("empty-state").hidden = vis.emptyHidden;
+  $("loading-state").hidden = vis.loadingHidden;
+  $("page-grid").hidden = vis.gridHidden;
+  // annotate view visibility is handled by annotateView.enter/close and panel
 
   gridCtl.render();
 
@@ -185,6 +228,7 @@ function renderAll() {
 // ---------- File handling ----------
 
 async function handleFiles(fileList) {
+  assertValidMode("loading", "handleFiles");
   store.patch({ mode: "loading" });
   const { valid, rejected } = await validateFiles(fileList);
   rejected.forEach(({ file, reason }) => {
@@ -252,13 +296,21 @@ async function handleFiles(fileList) {
         ? addedSourceFiles[0].name
         : `${addedSourceFiles.length} files`;
   }
+  // Initialize empty annotations for new pages
+  const newAnnotations = { ...state.annotations };
+  for (const page of addedPages) {
+    newAnnotations[page.id] = [];
+  }
+  const nextMode = pages.length ? "loaded" : "empty";
+  assertValidMode(nextMode, "handleFiles");
   store.patch({
-    mode: pages.length ? "loaded" : "empty",
+    mode: nextMode,
     fileName,
     sourceFiles: [...state.sourceFiles, ...addedSourceFiles],
     totalSize: totalBytes(),
     pages,
     selected: [],
+    annotations: newAnnotations,
   });
   // When exactly one source was added and it is a PDF, pre-fill the metadata
   // title from the file — but only while the field is still untouched.
@@ -317,6 +369,7 @@ function selectRangeTo(to) {
 
 function rotateSelected() {
   const state = getState();
+  if (!state.selected.length) return;
   store.checkpoint((s) => {
     s.pages = rotatePages(s.pages, state.selected);
   });
@@ -324,21 +377,40 @@ function rotateSelected() {
 
 function duplicateSelected() {
   const state = getState();
+  if (!state.selected.length) return;
   const { pages, dupes, nextId: newNextId } = duplicatePages(state.pages, state.selected, nextId);
   nextId = newNextId;
   focusedId = dupes[0]?.id ?? null;
   store.checkpoint((s) => {
     s.pages = pages;
     s.selected = dupes.map((page) => page.id);
+    // Duplicate annotations for each duplicated page using pure helpers
+    let newAnnotations = s.annotations || {};
+    for (let i = 0; i < dupes.length; i++) {
+      const origPage = state.pages.find((p) => p.id === state.selected[i]);
+      const dupePage = dupes[i];
+      if (origPage && s.annotations[origPage.id]) {
+        newAnnotations = duplicatePageAnnotations(newAnnotations, origPage.id, dupePage.id);
+      }
+    }
+    s.annotations = newAnnotations;
   });
 }
 
 function deleteSelected() {
   const state = getState();
+  if (!state.selected.length) return;
   const focusedIdx = state.pages.findIndex((page) => page.id === state.focusedId);
+  const deletedPageIds = new Set(state.selected);
   store.checkpoint((s) => {
     s.pages = deletePages(s.pages, state.selected);
     s.selected = [];
+    // Delete annotations for removed pages using pure helpers
+    let newAnnotations = s.annotations || {};
+    for (const pageId of deletedPageIds) {
+      newAnnotations = deletePageAnnotations(newAnnotations, pageId);
+    }
+    s.annotations = newAnnotations;
   });
   // If the focused page was deleted, focus the page that took its place (the
   // one after it), falling back to the page before it when it was the last
@@ -359,11 +431,19 @@ function deleteSelected() {
 
 function removeSourceFile(sourceId) {
   const state = getState();
+  const removedPageIds = new Set(state.pages.filter((p) => p.sourceId === sourceId).map((p) => p.id));
   store.checkpoint((s) => {
     s.pages = s.pages.filter((page) => page.sourceId !== sourceId);
     s.sourceFiles = s.sourceFiles.filter((file) => file.id !== sourceId);
     s.totalSize = totalBytes();
+    // Remove annotations for pages from this source using pure helpers
+    let newAnnotations = s.annotations || {};
+    for (const pageId of removedPageIds) {
+      newAnnotations = deletePageAnnotations(newAnnotations, pageId);
+    }
+    s.annotations = newAnnotations;
     if (s.pages.length === 0) {
+      assertValidMode("empty", "removeSourceFile checkpoint");
       s.mode = "empty";
       s.fileName = "No document";
       s.selected = [];
@@ -434,6 +514,7 @@ async function exportDocument(mode) {
       pageNumbers: options.pageNumbers,
       watermark: options.watermark,
       metadata: options.metadata,
+      annotations: state.annotations || {},
     });
     await downloadBytes(name, bytes);
   } catch (error) {
@@ -457,6 +538,13 @@ async function exportSplit(state) {
   for (let p = 0; p < plan.parts.length; p++) {
     const part = plan.parts[p];
     const pages = state.pages.slice(part.start - 1, part.end);
+    // Build annotations for just these pages
+    const partAnnotations = {};
+    for (const page of pages) {
+      if (state.annotations[page.id]) {
+        partAnnotations[page.id] = state.annotations[page.id];
+      }
+    }
     const { name, bytes } = await exporter.exportPages({
       pages,
       getSource,
@@ -466,6 +554,7 @@ async function exportSplit(state) {
       pageNumbers: options.pageNumbers,
       watermark: options.watermark,
       metadata: options.metadata,
+      annotations: partAnnotations,
     });
     parts.push({
       name: formatPartName(sanitizeName(state.fileName), p + 1, plan.parts.length, part),
@@ -489,6 +578,13 @@ async function extractSelected() {
   const positions = state.pages
     .map((page, index) => index + 1)
     .filter((_, index) => sel.has(state.pages[index].id));
+  // Build annotations for selected pages
+  const selectedAnnotations = {};
+  for (const page of state.pages) {
+    if (sel.has(page.id) && state.annotations[page.id]) {
+      selectedAnnotations[page.id] = state.annotations[page.id];
+    }
+  }
   try {
     const { name, bytes } = await exporter.exportPages({
       pages: state.pages,
@@ -496,6 +592,7 @@ async function extractSelected() {
       fileName: extractFileName(state.fileName, positions),
       exportMode: "selected",
       selected: new Set(state.selected),
+      annotations: selectedAnnotations,
     });
     await downloadBytes(name, bytes);
   } catch (error) {
@@ -509,6 +606,7 @@ async function previewFirstPage() {
   const state = getState();
   const page = state.pages[0];
   if (!page) return;
+  const pageAnnotations = state.annotations[page.id] ? { [page.id]: state.annotations[page.id] } : {};
   try {
     const { bytes } = await exporter.exportPages({
       pages: [page],
@@ -519,6 +617,7 @@ async function previewFirstPage() {
       pageNumbers: state.exportOptions.pageNumbers,
       watermark: state.exportOptions.watermark,
       metadata: state.exportOptions.metadata,
+      annotations: pageAnnotations,
     });
     await showPreview(bytes);
   } catch (error) {
@@ -685,6 +784,76 @@ $("rail-images").addEventListener("click", () => {
 });
 $("rail-extract").addEventListener("click", extractSelected);
 
+// Apply a mutator function to state.annotations through the store (one undo checkpoint per user action).
+function updateAnnotations(mutator) {
+  store.checkpoint((s) => {
+    s.annotations = mutator(s.annotations || {});
+  });
+}
+
+// In-page Annotate view
+const annotateView = mountAnnotateView($("annotate-view-container"), {
+  getState,
+  getSource,
+  updateAnnotations,
+  subscribe: (fn) => store.subscribe(fn),
+  store,
+  // Panel clicks an annotation list item -> select it in the view
+  onAnnotationSelect: (annotationId, pageId) => annotateView.selectAnnotation(annotationId, pageId),
+  onDone: () => {
+    // Switch back to Pages mode
+    setMode("pages").catch((e) => console.warn("Failed to exit annotate mode:", e));
+  },
+});
+
+async function setMode(view) {
+  const currentView = workarea.dataset.mode;
+  if (currentView === view) return;
+
+  const railItems = document.querySelectorAll("#rail .ds-rail-item[data-tool]");
+  railItems.forEach((item) => {
+    const isActive = item.dataset.tool === view;
+    item.classList.toggle("ds-rail-item--active", isActive);
+    item.setAttribute("aria-current", isActive ? "true" : "false");
+  });
+  workarea.dataset.mode = view;
+
+  // Update store so panel and other components can react to view changes
+  store.patch({ view });
+
+  // Update sub-toolbar title
+  const subTitle = workarea.querySelector(".sub-title");
+  if (subTitle) {
+    subTitle.textContent = view === "annotate" ? "Annotate" : "Pages";
+  }
+
+  if (view === "annotate") {
+    const state = getState();
+    const pageIndex = state.selected.length
+      ? state.pages.findIndex((p) => p.id === state.selected[0])
+      : state.focusedId != null
+        ? state.pages.findIndex((p) => p.id === state.focusedId)
+        : 0;
+    await annotateView.enter(Math.max(0, pageIndex));
+  } else {
+    annotateView.close();
+  }
+}
+
+$("rail-annotate").addEventListener("click", () => {
+  const state = getState();
+  if (!state.pages.length) {
+    toast("Open a document first.", { type: "error" });
+    return;
+  }
+  setMode("annotate").catch((e) => console.warn("Failed to enter annotate mode:", e));
+});
+
+// Also allow the Pages rail item to exit annotate mode
+$("rail-pages").addEventListener("click", () => {
+  setMode("pages").catch((e) => console.warn("Failed to exit annotate mode:", e));
+});
+
 // Float bar.
 const floatBar = mountFloatBar($("float-bar"), {
   onRotate: rotateSelected,
@@ -715,6 +884,9 @@ const panel = mountPanel($("right-panel"), {
     store.patch({ exportOptions: next });
   },
   onSourceRemove: (sourceId) => removeSourceFile(sourceId),
+  getState,
+  updateAnnotations,
+  store,
 });
 
 // Drawer panel (narrow viewports).
@@ -741,7 +913,8 @@ window.addEventListener("drop", (event) => {
   handleFiles([...event.dataTransfer.files]);
 });
 
-// Shortcuts (ignored while typing in inputs).
+// Shortcuts (ignored while typing in inputs). Page actions are disabled while
+// the annotate view is open so its own handlers own Delete/Backspace there.
 registerShortcuts({
   onRotate: rotateSelected,
   onDuplicate: duplicateSelected,
@@ -755,6 +928,7 @@ registerShortcuts({
   onDownload: () => {
     exportDocument(getState().exportMode);
   },
+  isPageShortcutsEnabled: () => getState().view !== "annotate",
 });
 
 // Alt+Left / Alt+Right move the selected block (or the focused page) one
@@ -809,4 +983,10 @@ void (async () => {
 
 // Initial render: build skeletons, then subscribe (which renders immediately).
 buildSkeletons(7, $("skeleton-grid"));
-store.subscribe(renderAll);
+store.subscribe((state) => {
+  renderAll(state);
+  // Refresh annotate view if open (for undo/redo while dialog open)
+  if (annotateView?.isOpen?.()) {
+    annotateView.refreshFromState();
+  }
+});

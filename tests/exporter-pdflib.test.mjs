@@ -229,3 +229,93 @@ test("exporter with real pdf-lib: watermark auto-size fits 80% of visual dimensi
   assert.ok(boxW1 <= 0.8 * 792 + 1e-6, `page 1 boxW ${boxW1} <= 633.6`);
   assert.ok(boxH1 <= 0.8 * 612 + 1e-6, `page 1 boxH ${boxH1} <= 489.6`);
 });
+
+test("exporter with real pdf-lib: highlight with pink color (#ffcccc) and opacity 0.8", async (t) => {
+  // Create a simple input PDF with one page
+  const input = await PDFDocument.create();
+  const page = input.addPage([612, 792]);
+  const font = await input.embedFont(StandardFonts.Helvetica);
+  page.drawText("Test Page", { x: 50, y: 700, size: 20, font, color: rgb(0, 0, 0) });
+  const inputBytes = await input.save();
+
+  const sources = new Map([["s1", { id: "s1", kind: "pdf", bytes: inputBytes, type: "application/pdf", size: inputBytes.length, pageCount: 1 }]]);
+
+  const pages = [{ id: "p1", sourceId: "s1", index: 0, rotated: 0 }];
+
+  const exporter = createExporter({ PDFLib: { PDFDocument, degrees, StandardFonts, rgb } });
+  const getSource = (id) => sources.get(id);
+
+  // Export with a highlight annotation using pink color #ffcccc and opacity 0.8
+  const { bytes: outBytes } = await exporter.exportPages({
+    pages,
+    getSource,
+    fileName: "highlight_test",
+    exportMode: "all",
+    selected: new Set(),
+    annotations: {
+      p1: [
+        { id: "h1", type: "highlight", x: 100, y: 100, width: 200, height: 50, color: "#ffcccc", opacity: 0.8 },
+      ],
+    },
+  });
+
+  // Reload the output PDF and verify it's valid
+  const out = await PDFDocument.load(outBytes, { updateMetadata: false });
+  assert.equal(out.getPageCount(), 1);
+  assert.equal(out.getProducer(), "PrivyPDF");
+
+  // Verify the page has the correct dimensions
+  const outPage = out.getPage(0);
+  assert.equal(outPage.getWidth(), 612);
+  assert.equal(outPage.getHeight(), 792);
+
+  // ---- MANDATORY: Parse content stream to verify rg operator and ExtGState ca ----
+  const pageNode = outPage.node;
+
+  // 1. Get and decompress ALL content streams (annotation is in the last one)
+  const contents = pageNode.Contents();
+  const zlib = await import("node:zlib");
+
+  let foundRg = false;
+  for (const contentStream of contents.array) {
+    const streamData = out.context.lookup(contentStream);
+    const decompressed = zlib.inflateSync(streamData.contents);
+    const contentStr = decompressed.toString("latin1");
+    if (contentStr.includes("1 0.8 0.8 rg")) {
+      foundRg = true;
+      break;
+    }
+  }
+
+  // 2. Verify the rg operator for non-stroking color (RGB)
+  // #ffcccc = rgb(1.0, 0.8, 0.8) in normalized 0-1 range
+  assert.ok(foundRg, "Content stream should contain '1 0.8 0.8 rg' for pink color #ffcccc");
+
+  // 3. Verify ExtGState with ca (alpha) = 0.8
+  const resources = pageNode.Resources();
+  // Find ExtGState resource by iterating (Map key is an object with encodedName)
+  let extGState = null;
+  for (const [k, v] of resources.dict) {
+    if (k.encodedName === "/ExtGState") {
+      extGState = out.context.lookup(v);
+      break;
+    }
+  }
+  assert.ok(extGState, "ExtGState resource should exist");
+
+  let foundCa = false;
+  for (const [gsName, gsRef] of extGState.dict) {
+    const gs = out.context.lookup(gsRef);
+    if (gs && gs.dict) {
+      for (const [k, v] of gs.dict) {
+        if (k.encodedName === "/ca" && v.numberValue === 0.8) {
+          foundCa = true;
+          break;
+        }
+      }
+    }
+    if (foundCa) break;
+  }
+  assert.ok(foundCa, "ExtGState should contain /ca 0.8 for opacity");
+  // -------------------------------------------------------------------------------
+});

@@ -6,6 +6,19 @@ import { subscribe as subscribeMeter } from "../core/privacy-meter.js";
 import { hydrateIcons } from "../icons.js";
 import { validateWatermark } from "../core/overlay.js";
 import { initDisclosures } from "../core/disclosure.js";
+import {
+  getAnnotationCount,
+  getPageAnnotations,
+  createTextAnnotation,
+  createHighlightAnnotation,
+  updateAnnotation,
+  deleteAnnotation,
+  DEFAULT_TEXT_FONT_SIZE,
+  DEFAULT_TEXT_COLOR,
+  DEFAULT_HIGHLIGHT_COLOR,
+  DEFAULT_HIGHLIGHT_OPACITY,
+  panelControlValues,
+} from "../core/annotations.js";
 
 export function mountPanel(root, opts = {}) {
   const {
@@ -16,6 +29,10 @@ export function mountPanel(root, opts = {}) {
     onPreview,
     onExportOptionsChange,
     onSourceRemove,
+    getState,
+    updateAnnotations,
+    store,
+    onAnnotationSelect,
   } = opts;
 
   const docName = root.querySelector("#doc-name");
@@ -59,11 +76,98 @@ export function mountPanel(root, opts = {}) {
   const splitSummary = root.querySelector("#split-summary");
   const splitRangesError = root.querySelector("#split-ranges-error");
 
+  // Annotate panel controls
+  const annotatePanelSection = root.querySelector("#annotate-panel-section");
+  const annotateHint = root.querySelector("#annotate-panel-hint");
+  const annotateHighlightOptions = root.querySelector("#annotate-highlight-options");
+  const annotateTextOptions = root.querySelector("#annotate-text-options");
+  const annotateFontSize = root.querySelector("#annotate-font-size");
+  const annotateOpacity = root.querySelector("#annotate-opacity");
+  const annotateDeleteBtn = root.querySelector("#annotate-panel-delete");
+  const annotateAnnotationList = root.querySelector("#annotate-annotation-list");
+  const annotateHighlightColorSwatches = () => root.querySelectorAll("#annotate-highlight-options .ds-color-swatch");
+  const annotateTextColorSwatches = () => root.querySelectorAll("#annotate-text-options .ds-color-swatch");
+
   const watermarkColorSwatches = () => root.querySelectorAll('[name="watermark-color"]');
 
   const unsubscribe = subscribeMeter((n) => {
     privacyCount.textContent = n;
   });
+
+  // Annotate panel event listeners
+  if (annotateFontSize) {
+    annotateFontSize.innerHTML = [8, 10, 12, 14, 16, 18, 24, 36, 48, 72].map(
+      (s) => `<option value="${s}"${s === DEFAULT_TEXT_FONT_SIZE ? " selected" : ""}>${s} pt</option>`
+    ).join("");
+    annotateFontSize.addEventListener("change", () => {
+      const state = getState?.();
+      // Update store setting for new annotations
+      store?.patch({ annotateFontSize: Number(annotateFontSize.value) });
+      // Update selected annotation if any
+      if (state && state.annotateSelectedAnnotationId && state.annotateSelectedPageId) {
+        updateAnnotations((anns) => {
+          const pageAnns = getPageAnnotations(anns, state.annotateSelectedPageId);
+          const ann = pageAnns.find((a) => a.id === state.annotateSelectedAnnotationId);
+          if (ann && ann.type === "text") {
+            return updateAnnotation(anns, state.annotateSelectedPageId, state.annotateSelectedAnnotationId, { fontSize: Number(annotateFontSize.value) });
+          }
+          return anns;
+        });
+      }
+    });
+  }
+
+  annotateHighlightColorSwatches().forEach((swatch) => {
+    swatch.addEventListener("click", () => {
+      annotateHighlightColorSwatches().forEach((s) => s.setAttribute("aria-checked", "false"));
+      swatch.setAttribute("aria-checked", "true");
+      const color = swatch.dataset.color;
+      // Update store setting for new annotations
+      store?.patch({ annotateHighlightColor: color });
+      // Update selected annotation if any
+      const state = getState?.();
+      if (state && state.annotateSelectedAnnotationId && state.annotateSelectedPageId) {
+        updateAnnotations((anns) => updateAnnotation(anns, state.annotateSelectedPageId, state.annotateSelectedAnnotationId, { color }));
+      }
+    });
+  });
+
+  annotateTextColorSwatches().forEach((swatch) => {
+    swatch.addEventListener("click", () => {
+      annotateTextColorSwatches().forEach((s) => s.setAttribute("aria-checked", "false"));
+      swatch.setAttribute("aria-checked", "true");
+      const color = swatch.dataset.color;
+      // Update store setting for new annotations
+      store?.patch({ annotateTextColor: color });
+      // Update selected annotation if any
+      const state = getState?.();
+      if (state && state.annotateSelectedAnnotationId && state.annotateSelectedPageId) {
+        updateAnnotations((anns) => updateAnnotation(anns, state.annotateSelectedPageId, state.annotateSelectedAnnotationId, { color }));
+      }
+    });
+  });
+
+  if (annotateOpacity) {
+    annotateOpacity.addEventListener("input", () => {
+      const opacity = Number(annotateOpacity.value) / 100;
+      // Update store setting for new annotations
+      store?.patch({ annotateHighlightOpacity: opacity });
+      // Update selected annotation if any
+      const state = getState?.();
+      if (state && state.annotateSelectedAnnotationId && state.annotateSelectedPageId) {
+        updateAnnotations((anns) => updateAnnotation(anns, state.annotateSelectedPageId, state.annotateSelectedAnnotationId, { opacity }));
+      }
+    });
+  }
+
+  if (annotateDeleteBtn) {
+    annotateDeleteBtn.addEventListener("click", () => {
+      const state = getState?.();
+      if (state && state.annotateSelectedAnnotationId && state.annotateSelectedPageId) {
+        updateAnnotations((anns) => deleteAnnotation(anns, state.annotateSelectedPageId, state.annotateSelectedAnnotationId));
+      }
+    });
+  }
 
   let editingName = false;
 
@@ -378,6 +482,12 @@ export function mountPanel(root, opts = {}) {
 
   return {
     render(state) {
+      // Show/hide annotate panel section based on view mode
+      const isAnnotateMode = state.view === "annotate";
+      if (annotatePanelSection) {
+        annotatePanelSection.hidden = !isAnnotateMode;
+      }
+
       statPages.textContent = state.pages.length;
       statSource.textContent = state.sourceFiles.length;
       statSize.textContent = formatBytes(state.totalSize);
@@ -438,6 +548,131 @@ export function mountPanel(root, opts = {}) {
       updateSplitDisable();
       updateSplitSummary();
       validateSplitRangesInline();
+
+      // Render annotate panel if in annotate mode
+      if (isAnnotateMode && annotatePanelSection && getState) {
+        const currentPageId = state.annotateCurrentPageId;
+        const selectedAnnotationId = state.annotateSelectedAnnotationId;
+        const selectedPageId = state.annotateSelectedPageId;
+        const currentTool = state.annotateCurrentTool || "select";
+
+        if (currentPageId) {
+          const pageIndex = state.pages.findIndex((p) => p.id === currentPageId) + 1;
+          annotateHint.textContent = currentTool === "select"
+            ? `${getAnnotationCount(state.annotations || {}, currentPageId)} annotation(s) — click to select, drag to move, Del to delete`
+            : currentTool === "text"
+              ? "Click on the page to add a text box. Type, then press Enter or click away to commit. Esc to cancel."
+              : "Drag on the page to create a highlight. Click away or press Esc to cancel.";
+
+          // Find the selected annotation object (if any) so the panel shows its
+          // own values rather than the store defaults for new annotations.
+          let selectedAnnotation = null;
+          if (state.annotateSelectedAnnotationId) {
+            const pageAnns = getPageAnnotations(state.annotations || {}, state.annotateSelectedPageId || currentPageId);
+            selectedAnnotation = pageAnns.find((a) => a.id === state.annotateSelectedAnnotationId);
+          }
+
+          // Show/hide option groups: match the active tool OR the selected
+          // annotation's type (a selected highlight shows highlight options even
+          // when the tool is "select", and vice versa).
+          const showHighlight = currentTool === "highlight" || selectedAnnotation?.type === "highlight";
+          const showText = currentTool === "text" || selectedAnnotation?.type === "text";
+          if (annotateHighlightOptions) annotateHighlightOptions.hidden = !showHighlight;
+          if (annotateTextOptions) annotateTextOptions.hidden = !showText;
+
+          // Controls reflect the selected annotation's values, falling back to
+          // the store defaults (panelControlValues is pure, in annotations.js).
+          const values = panelControlValues(state, selectedAnnotation);
+
+          // Update color swatches for highlight
+          const highlightColor = values.highlightColor;
+          annotateHighlightColorSwatches().forEach((swatch) => {
+            swatch.setAttribute("aria-checked", String(swatch.dataset.color === highlightColor));
+          });
+
+          // Update color swatches for text
+          const textColor = values.textColor;
+          annotateTextColorSwatches().forEach((swatch) => {
+            swatch.setAttribute("aria-checked", String(swatch.dataset.color === textColor));
+          });
+
+          // Update font size; guarantee the select contains the value even if
+          // it is not one of the preset options.
+          if (annotateFontSize) {
+            annotateFontSize.value = String(values.fontSize);
+            if (annotateFontSize.value !== String(values.fontSize)) {
+              const options = annotateFontSize.options || [];
+              const exists = options.some((o) => o.value === String(values.fontSize));
+              if (!exists) {
+                const option = document.createElement("option");
+                option.value = String(values.fontSize);
+                option.textContent = `${values.fontSize} pt`;
+                annotateFontSize.appendChild(option);
+              }
+              annotateFontSize.value = String(values.fontSize);
+            }
+          }
+
+          // Update opacity
+          if (annotateOpacity) {
+            annotateOpacity.value = String(Math.round(values.opacity * 100));
+          }
+
+          // Show/hide delete button
+          if (annotateDeleteBtn) {
+            annotateDeleteBtn.hidden = !selectedAnnotationId;
+          }
+
+          // Render annotation list for current page
+          if (annotateAnnotationList) {
+            annotateAnnotationList.innerHTML = "";
+            const anns = getPageAnnotations(state.annotations || {}, currentPageId);
+            if (anns.length === 0) {
+              const empty = document.createElement("div");
+              empty.className = "ds-sr-only";
+              empty.textContent = "No annotations on this page";
+              annotateAnnotationList.appendChild(empty);
+            } else {
+              for (const ann of anns) {
+                const item = document.createElement("button");
+                item.className = `annotate-annotation-item${ann.id === selectedAnnotationId ? " selected" : ""}`;
+                item.type = "button";
+                item.dataset.annotationId = ann.id;
+
+                const icon = document.createElement("i");
+                icon.className = "annotate-annotation-icon";
+                icon.setAttribute("data-icon", ann.type === "text" ? "type" : "highlighter");
+                icon.setAttribute("aria-hidden", "true");
+                item.appendChild(icon);
+
+                const label = document.createElement("span");
+                label.className = "annotate-annotation-label";
+                if (ann.type === "text") {
+                  label.textContent = (ann.text || "Empty text").slice(0, 50);
+                } else {
+                  label.textContent = `Highlight ${Math.round(ann.width)}×${Math.round(ann.height)} pt`;
+                }
+                item.appendChild(label);
+
+                const pageLabel = document.createElement("span");
+                pageLabel.className = "annotate-annotation-page";
+                pageLabel.textContent = `Page ${pageIndex}`;
+                item.appendChild(pageLabel);
+
+                item.addEventListener("click", () => {
+                  // Select the annotation in the annotate view and scroll it into view
+                  if (onAnnotationSelect) {
+                    onAnnotationSelect(ann.id, currentPageId);
+                  }
+                });
+
+                hydrateIcons(item);
+                annotateAnnotationList.appendChild(item);
+              }
+            }
+          }
+        }
+      }
 
       sourceList.textContent = "";
       state.sourceFiles.forEach((file) => {

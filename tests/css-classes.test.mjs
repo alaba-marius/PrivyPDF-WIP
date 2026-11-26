@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { globSync } from "node:fs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const theme = readFileSync(join(ROOT, "css/theme.css"), "utf8");
 const editor = readFileSync(join(ROOT, "editor.html"), "utf8");
+const editorCss = readFileSync(join(ROOT, "css/editor.css"), "utf8");
 
 function classTokens(htmlText) {
   return [...htmlText.matchAll(/class\s*=\s*"([^"]*)"/gi)].flatMap((m) =>
@@ -57,8 +59,6 @@ test("every ds- class used in editor.html is defined in css/theme.css", (t) => {
   }
   assert.deepStrictEqual(missing, [], `editor.html uses undefined theme classes: ${missing.join(", ")}`);
 });
-
-const editorCss = readFileSync(join(ROOT, "css/editor.css"), "utf8");
 
 function element(id) {
   const m = editor.match(new RegExp(`<[\\w:-]+[^>]*\\bid="${id}"[^>]*>`));
@@ -180,4 +180,174 @@ test("editor.css phone block (479px): .sub-right is a row flex container", (t) =
   assert.ok(/flex-direction:\s*row/.test(body), ".sub-right direction is row");
   assert.ok(/flex-wrap:\s*nowrap/.test(body), ".sub-right does not wrap");
   assert.ok(/gap:\s*8px/.test(body), ".sub-right gap is 8px");
+});
+
+// --- New tests for annotate modal and JS class coverage ---
+
+// State classes that are toggled dynamically and don't need CSS rules (they're
+// covered by parent selectors like .annotate-tool[aria-pressed="true"] or
+// .annotate-text-annotation.selected)
+const STATE_CLASS_ALLOWLIST = new Set([
+  "selected",
+  "is-dragging",
+  "is-visible",
+  "ds-fs--hover",
+  "ds-fs--focus",
+  "ds-fs--disabled",
+]);
+
+// Extract all class tokens from a JS/TS file: template strings, className
+// assignments, classList.add/toggle/remove, and element.className = "...".
+// Ignores template literal interpolations like ${...}.
+function jsClassTokens(jsText) {
+  const tokens = new Set();
+
+  // Template string class="..." or class='...' — skip if it contains ${ (interpolation)
+  for (const m of jsText.matchAll(/class\s*=\s*["'`]([^"'`]*)["'`]/g)) {
+    if (m[1].includes("${")) continue;
+    for (const t of m[1].split(/\s+/)) if (t) tokens.add(t);
+  }
+
+  // Template string class=`...` with possible interpolations — extract static parts only
+  for (const m of jsText.matchAll(/class\s*=\s*`([^`]*)`/g)) {
+    // Split by ${...} and only process static segments
+    const staticParts = m[1].split(/\$\{[^}]*\}/);
+    for (const part of staticParts) {
+      for (const t of part.split(/\s+/)) if (t) tokens.add(t);
+    }
+  }
+
+  // className = "..." or className='...' (skip template literals with interpolations)
+  for (const m of jsText.matchAll(/className\s*=\s*["']([^"']*)["']/g)) {
+    for (const t of m[1].split(/\s+/)) if (t) tokens.add(t);
+  }
+
+  // classList.add("..."), .toggle("..."), .remove("..."), .contains("...")
+  for (const m of jsText.matchAll(/classList\.(?:add|toggle|remove|contains)\s*\(\s*["'`]([^"'`]*)["'`]\s*\)/g)) {
+    if (m[1].includes("${")) continue;
+    for (const t of m[1].split(/\s+/)) if (t) tokens.add(t);
+  }
+
+  // element.classList.add("a", "b", ...) with multiple args
+  for (const m of jsText.matchAll(/classList\.(?:add|toggle|remove)\s*\(\s*([^)]+)\)/g)) {
+    const args = m[1].split(",").map((a) => a.trim());
+    for (const arg of args) {
+      const mm = arg.match(/^["'`]([^"'`]*)["'`]$/);
+      if (mm && !mm[1].includes("${")) {
+        for (const t of mm[1].split(/\s+/)) if (t) tokens.add(t);
+      }
+    }
+  }
+
+  return tokens;
+}
+
+function collectAllJsClasses() {
+  const tokens = new Set();
+  const uiFiles = globSync("js/ui/*.js", { cwd: ROOT });
+  for (const file of uiFiles) {
+    const text = readFileSync(join(ROOT, file), "utf8");
+    for (const t of jsClassTokens(text)) tokens.add(t);
+  }
+  return tokens;
+}
+
+test("ANNOTATE_VIEW_HTML root element is a <div> (not dialog)", (t) => {
+  const annotateJs = readFileSync(join(ROOT, "js/ui/annotate-view.js"), "utf8");
+  const match = annotateJs.match(/const ANNOTATE_VIEW_HTML\s*=\s*[`']([\s\S]*?)[`'];/);
+  assert.ok(match, "ANNOTATE_VIEW_HTML constant not found");
+  const html = match[1].trim();
+  assert.ok(/^<div\b/i.test(html), "ANNOTATE_VIEW_HTML must start with <div>");
+});
+
+test("every annotate-* and ds-* class used in js/ui/annotate-view.js has a CSS rule in theme.css or editor.css", (t) => {
+  const annotateViewJs = readFileSync(join(ROOT, "js/ui/annotate-view.js"), "utf8");
+  const tokens = new Set();
+  for (const t of jsClassTokens(annotateViewJs)) tokens.add(t);
+  const missing = [];
+  for (const token of tokens) {
+    if (!token.startsWith("annotate-") && !token.startsWith("ds-")) continue;
+    if (STATE_CLASS_ALLOWLIST.has(token)) continue;
+    // Check for CSS rule: .token { or .token: or .token:: or .token[
+    const cssRuleRe = new RegExp(`\\.${token.replace(/-/g, "\\-")}\\s*[\\{:\\[\\.]`);
+    const inTheme = cssRuleRe.test(theme);
+    const inEditorCss = cssRuleRe.test(editorCss);
+    if (!inTheme && !inEditorCss) {
+      missing.push(token);
+    }
+  }
+  assert.deepStrictEqual(missing, [], `JS uses undefined annotate-/ds- classes: ${missing.join(", ")}`);
+});
+
+test("css/theme.css hides closed ds-modal dialogs", (t) => {
+  // .ds-modal:not([open]) { display: none; } must exist right after .ds-modal rule
+  assert.ok(
+    /\.ds-modal:not\(\[open\]\)\s*\{[\s\S]*?display:\s*none/.test(theme),
+    "theme.css must have .ds-modal:not([open]) { display: none; }"
+  );
+});
+
+test("in-page annotate view layout: .annotate-view-container active, .annotate-pages-wrap scrolls", (t) => {
+  // .annotate-view-container.active must have display: flex
+  assert.ok(
+    /\.annotate-view-container\.active\s*\{[\s\S]*?display:\s*flex/.test(editorCss),
+    ".annotate-view-container.active must define display: flex"
+  );
+  // .annotate-pages-wrap must have overflow: auto and min-height: 0
+  const wrapMatch = editorCss.match(/\.annotate-pages-wrap\s*\{([\s\S]*?)\}/);
+  assert.ok(wrapMatch, ".annotate-pages-wrap rule must exist");
+  const wrapBody = wrapMatch[1];
+  assert.ok(/overflow:\s*auto/.test(wrapBody), ".annotate-pages-wrap must have overflow: auto");
+  assert.ok(/min-height:\s*0/.test(wrapBody), ".annotate-pages-wrap must have min-height: 0");
+  assert.ok(/flex:\s*1/.test(wrapBody), ".annotate-pages-wrap must have flex: 1");
+});
+
+// --- New tests for Bug 2 & 3 fixes ---
+
+test("annotate toolbar has no tool-options element (Bug 2: removed duplicate controls)", (t) => {
+  // The .annotate-tool-options element should not exist in the ANNOTATE_VIEW_HTML
+  const annotateJs = readFileSync(join(ROOT, "js/ui/annotate-view.js"), "utf8");
+  const match = annotateJs.match(/const ANNOTATE_VIEW_HTML\s*=\s*[`']([\s\S]*?)[`'];/);
+  assert.ok(match, "ANNOTATE_VIEW_HTML constant not found");
+  const html = match[1];
+  assert.ok(!/annotate-tool-options/.test(html), "ANNOTATE_VIEW_HTML must not contain annotate-tool-options element");
+});
+
+test("annotate toolbar has no renderToolOptions function (Bug 2: removed duplicate controls)", (t) => {
+  const annotateJs = readFileSync(join(ROOT, "js/ui/annotate-view.js"), "utf8");
+  assert.ok(!/function renderToolOptions|renderToolOptions\s*=/ .test(annotateJs), "annotate-view.js must not contain renderToolOptions function");
+});
+
+test("right panel uses ds-form-field for label-above-control layout (Bug 3: no overlap)", (t) => {
+  // The annotate panel should use ds-form-field for highlight color and opacity
+  assert.ok(/ds-form-field[\s\S]*?annotate-highlight-colors/.test(editor), "Highlight color should use ds-form-field");
+  assert.ok(/ds-form-field[\s\S]*?annotate-opacity/.test(editor), "Opacity should use ds-form-field");
+  assert.ok(/ds-form-field[\s\S]*?annotate-font-size/.test(editor), "Text size should use ds-form-field");
+  assert.ok(/ds-form-field[\s\S]*?annotate-text-colors/.test(editor), "Text color should use ds-form-field");
+});
+
+test("right panel has no position:absolute on form labels or controls (Bug 3: no absolute positioning)", (t) => {
+  // Check that ds-form-field, ds-field-label, ds-color-swatch-group don't use position:absolute
+  // in the context of the annotate panel
+  const panelCss = editorCss + theme;
+
+  // ds-form-field should use flex-direction: column, not position:absolute
+  const formFieldMatch = panelCss.match(/\.ds-form-field\s*\{([\s\S]*?)\}/);
+  assert.ok(formFieldMatch, ".ds-form-field rule must exist");
+  const formFieldBody = formFieldMatch[1];
+  assert.ok(/flex-direction:\s*column/.test(formFieldBody), ".ds-form-field must use flex-direction: column");
+  assert.ok(!/position:\s*absolute/.test(formFieldBody), ".ds-form-field must not use position:absolute");
+
+  // ds-field-label should not use position:absolute
+  const labelMatch = panelCss.match(/\.ds-field-label\s*\{([\s\S]*?)\}/);
+  assert.ok(labelMatch, ".ds-field-label rule must exist");
+  const labelBody = labelMatch[1];
+  assert.ok(!/position:\s*absolute/.test(labelBody), ".ds-field-label must not use position:absolute");
+
+  // ds-color-swatch-group should not use position:absolute
+  const swatchMatch = panelCss.match(/\.ds-color-swatch-group\s*\{([\s\S]*?)\}/);
+  if (swatchMatch) {
+    const swatchBody = swatchMatch[1];
+    assert.ok(!/position:\s*absolute/.test(swatchBody), ".ds-color-swatch-group must not use position:absolute");
+  }
 });

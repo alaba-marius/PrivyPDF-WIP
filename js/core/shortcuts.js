@@ -20,7 +20,18 @@ export function matchShortcut(eventLike) {
   return null;
 }
 
-export function registerShortcuts({ onRotate, onDelete, onUndo, onRedo, onDownload }) {
+export function registerShortcuts({
+  onRotate,
+  onDelete,
+  onDuplicate,
+  onUndo,
+  onRedo,
+  onDownload,
+  // When false, page-level actions (rotate/delete/duplicate) are ignored.
+  // Undo, redo and download always stay enabled. The annotate view passes
+  // `() => getState().view !== "annotate"` so its own handlers own Delete/Backspace.
+  isPageShortcutsEnabled,
+}) {
   function isTyping(target) {
     return (
       target &&
@@ -30,6 +41,7 @@ export function registerShortcuts({ onRotate, onDelete, onUndo, onRedo, onDownlo
         target.tagName === "SELECT")
     );
   }
+  const pageActionsEnabled = () => isPageShortcutsEnabled?.() !== false;
 
   window.addEventListener("keydown", (event) => {
     if (isTyping(event.target)) return;
@@ -38,9 +50,13 @@ export function registerShortcuts({ onRotate, onDelete, onUndo, onRedo, onDownlo
     if (!action) return;
     event.preventDefault();
 
-    if (action === "rotate") onRotate?.();
-    else if (action === "delete") onDelete?.();
-    else if (action === "undo") onUndo?.();
+    if (action === "rotate") {
+      if (pageActionsEnabled()) onRotate?.();
+    } else if (action === "delete") {
+      if (pageActionsEnabled()) onDelete?.();
+    } else if (action === "duplicate") {
+      if (pageActionsEnabled()) onDuplicate?.();
+    } else if (action === "undo") onUndo?.();
     else if (action === "redo") onRedo?.();
     else if (action === "download") onDownload?.();
   });

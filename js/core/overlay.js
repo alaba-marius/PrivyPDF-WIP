@@ -32,7 +32,7 @@ export const LABEL_POSITIONS = [
 ];
 
 // Visual size for a given rotation.
-function visualDims(pageW, pageH, rotation) {
+export function visualDims(pageW, pageH, rotation) {
   if (rotation === 90 || rotation === 270) return { visualW: pageH, visualH: pageW };
   return { visualW: pageW, visualH: pageH };
 }

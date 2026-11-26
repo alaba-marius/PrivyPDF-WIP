@@ -35,12 +35,12 @@
       </header>
       <div class="app-body">
         <nav class="rail ds-rail" id="rail">
-          <button class="ds-rail-item ds-rail-item--active" aria-current="true" data-tool="pages"><i data-icon="layers"></i><span>Pages</span></button>
+          <button class="ds-rail-item ds-rail-item--active" id="rail-pages" aria-current="true" data-tool="pages"><i data-icon="layers"></i><span>Pages</span></button>
           <button class="ds-rail-item" data-tool="merge" id="rail-merge" aria-label="Add PDFs to merge"><i data-icon="file-plus"></i><span>Merge</span></button>
           <button class="ds-rail-item" data-tool="images" id="rail-images" aria-label="Add images as pages"><i data-icon="image"></i><span>Images</span></button>
           <button class="ds-rail-item" data-tool="extract" id="rail-extract" aria-label="Extract selected pages"><i data-icon="scissors"></i><span>Extract</span></button>
           <div class="rail-divider" aria-hidden="true"></div>
-          <button class="ds-rail-item ds-rail-item--soon" disabled data-tool="annotate"><i data-icon="pen"></i><span>Annotate</span><span class="rail-soon">Soon</span></button>
+          <button class="ds-rail-item" data-tool="annotate" id="rail-annotate" aria-label="Annotate pages"><i data-icon="pen"></i><span>Annotate</span></button>
           <button class="ds-rail-item ds-rail-item--soon" disabled data-tool="text"><i data-icon="type"></i><span>Text</span><span class="rail-soon">Soon</span></button>
           <button class="ds-rail-item ds-rail-item--soon" disabled data-tool="sign"><i data-icon="signature"></i><span>Sign</span><span class="rail-soon">Soon</span></button>
           <button class="ds-rail-item ds-rail-item--soon" disabled data-tool="protect"><i data-icon="lock"></i><span>Protect</span><span class="rail-soon">Soon</span></button>
@@ -87,8 +87,60 @@
             <button class="ds-floatbar-btn" id="float-extract" aria-label="Extract selected pages"><i data-icon="scissors"></i><span>Extract</span></button>
             <button class="ds-floatbar-btn ds-floatbar-btn--danger" id="float-delete" aria-label="Delete selected pages"><i data-icon="trash"></i><span>Delete</span></button>
           </div>
+
+          <!-- In-page Annotate view (replaces modal) -->
+          <div class="annotate-view-container" id="annotate-view-container"></div>
         </main>
         <aside class="right-panel ds-panel" id="right-panel">
+          <!-- Annotate section (shown only in annotate mode) -->
+          <div class="ds-stack ds-stack--sm panel-section ds-panel-section annotate-panel-section" id="annotate-panel-section" hidden>
+            <span class="panel-label ds-panel-label">Annotate</span>
+            <p class="annotate-hint" id="annotate-panel-hint">Click to add text, drag to highlight</p>
+            <div class="ds-stack ds-stack--sm annotate-options">
+              <!-- Highlight options -->
+              <div class="annotate-highlight-options" id="annotate-highlight-options">
+                <div class="ds-form-field">
+                  <label class="ds-field-label" for="annotate-highlight-colors">Highlight color</label>
+                  <div class="ds-color-swatch-group annotate-highlight-colors" id="annotate-highlight-colors" role="group" aria-label="Highlight color">
+                    <button class="ds-color-swatch" data-color="#ffe14d" aria-checked="true"></button>
+                    <button class="ds-color-swatch" data-color="#ffcccc"></button>
+                    <button class="ds-color-swatch" data-color="#ccffcc"></button>
+                    <button class="ds-color-swatch" data-color="#ccccff"></button>
+                    <button class="ds-color-swatch" data-color="#ffffcc"></button>
+                    <button class="ds-color-swatch" data-color="#ffccff"></button>
+                    <button class="ds-color-swatch" data-color="#ccffff"></button>
+                  </div>
+                </div>
+                <div class="ds-form-field">
+                  <label class="ds-field-label" for="annotate-opacity">Opacity</label>
+                  <input class="ds-input" id="annotate-opacity" type="range" min="0" max="100" value="40" />
+                </div>
+              </div>
+              <!-- Text options -->
+              <div class="annotate-text-options" id="annotate-text-options" hidden>
+                <div class="ds-form-field">
+                  <label class="ds-field-label" for="annotate-font-size">Text size</label>
+                  <select class="ds-select annotate-font-size" id="annotate-font-size"></select>
+                </div>
+                <div class="ds-form-field">
+                  <label class="ds-field-label" for="annotate-text-colors">Text color</label>
+                  <div class="ds-color-swatch-group annotate-text-colors" id="annotate-text-colors" role="group" aria-label="Text color">
+                    <button class="ds-color-swatch" data-color="#000000" aria-checked="true"></button>
+                    <button class="ds-color-swatch" data-color="#ffffff"></button>
+                    <button class="ds-color-swatch" data-color="#ff0000"></button>
+                    <button class="ds-color-swatch" data-color="#0066ff"></button>
+                    <button class="ds-color-swatch" data-color="#00aa00"></button>
+                    <button class="ds-color-swatch" data-color="#ff8800"></button>
+                    <button class="ds-color-swatch" data-color="#aa00aa"></button>
+                    <button class="ds-color-swatch" data-color="#00aaaa"></button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <button class="ds-btn ds-btn--sm ds-btn--ghost annotate-delete-btn" id="annotate-panel-delete" hidden>Delete</button>
+            <div class="annotate-annotation-list" id="annotate-annotation-list" aria-label="Annotations on this page"></div>
+          </div>
+
           <div class="ds-stack ds-stack--sm panel-section ds-panel-section">
             <label for="doc-name" class="panel-label ds-panel-label">Document</label>
             <div class="file-field">

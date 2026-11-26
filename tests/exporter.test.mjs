@@ -8,7 +8,7 @@ function makePDFLib() {
 
   // A fake pdf-lib page: tracks its rotation and records drawText calls.
   // Strict: asserts pdf-lib's real signatures (text, size) and (string, options).
-  function pageWithRotation(index) {
+  function pageWithRotation(index, doc) {
     let rotation = 0;
     return {
       getRotation: () => ({ angle: rotation }),
@@ -22,6 +22,10 @@ function makePDFLib() {
         if (opts && typeof opts !== "object") throw new Error("drawText opts must be object");
         ops.push(["drawText", { ...opts, text }]);
       },
+      drawRectangle(opts) {
+        if (opts && typeof opts !== "object") throw new Error("drawRectangle opts must be object");
+        ops.push(["drawRectangle", { ...opts }]);
+      },
       // Scale with size like real pdf-lib: at size 100, width ≈ text.length * 10
       widthOfTextAtSize(text, size) {
         if (typeof text !== "string") throw new Error("widthOfTextAtSize text must be string");
@@ -30,13 +34,14 @@ function makePDFLib() {
       },
       getWidth: () => 612,
       getHeight: () => 792,
+      doc, // reference to the document for embedFont
     };
   }
 
   const PDFDocument = {
     async create() {
       ops.push(["create"]);
-      return {
+      const doc = {
         setProducer(text) { ops.push(["producer", text]); },
         setCreator(text) { ops.push(["creator", text]); },
         setTitle(text) { ops.push(["setTitle", text]); },
@@ -46,7 +51,7 @@ function makePDFLib() {
         addPage(page) {
           // A real page object (e.g. copied from a source PDF) is stored as-is;
           // a dimension array [w, h] (image pages) gets a fresh blank page.
-          const p = page && page.drawImage ? page : pageWithRotation(pages.length);
+          const p = page && page.drawImage ? page : pageWithRotation(pages.length, doc);
           pages.push(p);
           return p;
         },
@@ -75,20 +80,22 @@ function makePDFLib() {
         },
         async copyPages(_doc, indexes) {
           ops.push(["copy", ...indexes]);
-          return indexes.map((index) => pageWithRotation(index));
+          return indexes.map((index) => pageWithRotation(index, doc));
         },
         getPageCount: () => pages.length,
         getPage: (index) => pages[index],
       };
+      return doc;
     },
     async load(bytes) {
       ops.push(["load", bytes.length]);
-      return {
+      const doc = {
         async copyPages(_doc, indexes) {
           ops.push(["copy", ...indexes]);
-          return indexes.map((index) => pageWithRotation(index));
+          return indexes.map((index) => pageWithRotation(index, doc));
         },
       };
+      return doc;
     },
   };
   return {
@@ -432,4 +439,294 @@ test("exportPages does not draw watermark when enabled is false", async (t) => {
   });
   const drawn = drawnTexts(PDFLib);
   assert.equal(drawn.length, 0);
+});
+
+// --- Annotation tests ---
+
+function drawnRects(PDFLib) {
+  return PDFLib.ops.filter((o) => o[0] === "drawRectangle").map((o) => o[1]);
+}
+
+test("exportPages draws text annotations at correct position on unrotated page", async (t) => {
+  const PDFLib = makePDFLib();
+  const exporter = createExporter({ PDFLib });
+  const pages = [{ id: "p1", sourceId: "s1", index: 0, rotated: 0 }];
+  const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 1 }]]);
+  await exporter.exportPages({
+    pages, getSource: (id) => sources.get(id), fileName: "x",
+    exportMode: "all", selected: new Set(),
+    pageNumbers: { mode: "all", format: "n", skipFirst: false, position: "bottom-center", start: 1, fontSize: 10, margin: 36, applyTo: "all" },
+    annotations: {
+      p1: [
+        { id: "a1", type: "text", x: 100, y: 200, text: "Hello", fontSize: 14, color: "#000000" },
+      ],
+    },
+  });
+  const drawn = drawnTexts(PDFLib);
+  // 1 page number + 1 annotation = 2 drawText calls
+  assert.equal(drawn.length, 2);
+  const ann = drawn.find((d) => d.text === "Hello");
+  assert.ok(ann, "annotation text should be drawn");
+  assert.equal(ann.x, 100);
+  assert.equal(ann.y, 200);
+  assert.equal(ann.size, 14);
+  assert.deepStrictEqual(ann.color, [0, 0, 0]);
+  assert.equal(ann.rotate.angle, 0); // rotation 0
+});
+
+test("exportPages draws text annotations with correct rotation on rotated pages", async (t) => {
+  const PDFLib = makePDFLib();
+  const exporter = createExporter({ PDFLib });
+  const pages = [
+    { id: "p1", sourceId: "s1", index: 0, rotated: 90 },
+    { id: "p2", sourceId: "s1", index: 1, rotated: 180 },
+  ];
+  const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 2 }]]);
+  await exporter.exportPages({
+    pages, getSource: (id) => sources.get(id), fileName: "x",
+    exportMode: "all", selected: new Set(),
+    annotations: {
+      p1: [{ id: "a1", type: "text", x: 100, y: 200, text: "R90", fontSize: 14, color: "#000000" }],
+      p2: [{ id: "a2", type: "text", x: 300, y: 400, text: "R180", fontSize: 14, color: "#000000" }],
+    },
+  });
+  const drawn = drawnTexts(PDFLib);
+  const ann1 = drawn.find((d) => d.text === "R90");
+  const ann2 = drawn.find((d) => d.text === "R180");
+  assert.ok(ann1);
+  assert.ok(ann2);
+  // Annotation should be rotated by effective rotation to appear upright in visual space
+  assert.equal(ann1.rotate.angle, 90);
+  assert.equal(ann2.rotate.angle, 180);
+});
+
+test("exportPages draws highlight annotations on unrotated page", async (t) => {
+  const PDFLib = makePDFLib();
+  const exporter = createExporter({ PDFLib });
+  const pages = [{ id: "p1", sourceId: "s1", index: 0, rotated: 0 }];
+  const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 1 }]]);
+  await exporter.exportPages({
+    pages, getSource: (id) => sources.get(id), fileName: "x",
+    exportMode: "all", selected: new Set(),
+    annotations: {
+      p1: [
+        { id: "h1", type: "highlight", x: 100, y: 100, width: 200, height: 50, color: "#ffe14d", opacity: 0.4 },
+      ],
+    },
+  });
+  const rects = drawnRects(PDFLib);
+  assert.equal(rects.length, 1);
+  const rect = rects[0];
+  // Page space rectangle at (100,100) width 200 height 50
+  assert.equal(rect.x, 100);
+  assert.equal(rect.y, 100);
+  assert.equal(rect.width, 200);
+  assert.equal(rect.height, 50);
+  assert.deepStrictEqual(rect.color, [1, 0.8823529411764706, 0.30196078431372547]); // #ffe14d
+  assert.equal(rect.opacity, 0.4);
+});
+
+test("exportPages draws highlight annotations with correct position on rotated page (90°)", async (t) => {
+  const PDFLib = makePDFLib();
+  const exporter = createExporter({ PDFLib });
+  const pages = [{ id: "p1", sourceId: "s1", index: 0, rotated: 90 }];
+  const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 1 }]]);
+  await exporter.exportPages({
+    pages, getSource: (id) => sources.get(id), fileName: "x",
+    exportMode: "all", selected: new Set(),
+    annotations: {
+      p1: [
+        { id: "h1", type: "highlight", x: 100, y: 100, width: 200, height: 50, color: "#ffe14d", opacity: 0.4 },
+      ],
+    },
+  });
+  const rects = drawnRects(PDFLib);
+  assert.equal(rects.length, 1);
+  const rect = rects[0];
+  // For rotation 90: pageToVisual({x:100, y:100}, 612, 792, 90) = {x: 100, y: 512}
+  // pageToVisual({x:300, y:100}) = {x: 100, y: 312}
+  // pageToVisual({x:300, y:150}) = {x: 150, y: 312}
+  // pageToVisual({x:100, y:150}) = {x: 150, y: 512}
+  // Visual bounds: x in [100, 150], y in [312, 512]
+  // Back to page space (r=90): visualToPage({x:100, y:312}) = {x: 300, y: 100}
+  // visualToPage({x:150, y:512}) = {x: 100, y: 150}
+  // So rect in page space: x=100, y=100, width=200, height=50
+  assert.equal(rect.x, 100);
+  assert.equal(rect.y, 100);
+  assert.equal(rect.width, 200);
+  assert.equal(rect.height, 50);
+});
+
+test("exportPages draws highlight annotations with correct position on rotated page (180°)", async (t) => {
+  const PDFLib = makePDFLib();
+  const exporter = createExporter({ PDFLib });
+  const pages = [{ id: "p1", sourceId: "s1", index: 0, rotated: 180 }];
+  const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 1 }]]);
+  await exporter.exportPages({
+    pages, getSource: (id) => sources.get(id), fileName: "x",
+    exportMode: "all", selected: new Set(),
+    annotations: {
+      p1: [
+        { id: "h1", type: "highlight", x: 100, y: 100, width: 200, height: 50, color: "#ffe14d", opacity: 0.4 },
+      ],
+    },
+  });
+  const rects = drawnRects(PDFLib);
+  assert.equal(rects.length, 1);
+  const rect = rects[0];
+  // For rotation 180: visual bounds for page-space rect (100,100)-(300,150)
+  // corners: (100,100)->(512,692), (300,100)->(312,692), (300,150)->(312,642), (100,150)->(512,642)
+  // visual bounds: x in [312,512], y in [642,692]
+  // Back to page space: visualToPage({x:312,y:642}) = {x:300,y:150}, visualToPage({x:512,y:692}) = {x:100,y:100}
+  // So rect in page space: x=100, y=100, width=200, height=50 (same as original since 180 is symmetric)
+  assert.equal(rect.x, 100);
+  assert.equal(rect.y, 100);
+  assert.equal(rect.width, 200);
+  assert.equal(rect.height, 50);
+});
+
+test("exportPages draws highlight annotations with correct position on rotated page (270°)", async (t) => {
+  const PDFLib = makePDFLib();
+  const exporter = createExporter({ PDFLib });
+  const pages = [{ id: "p1", sourceId: "s1", index: 0, rotated: 270 }];
+  const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 1 }]]);
+  await exporter.exportPages({
+    pages, getSource: (id) => sources.get(id), fileName: "x",
+    exportMode: "all", selected: new Set(),
+    annotations: {
+      p1: [
+        { id: "h1", type: "highlight", x: 100, y: 100, width: 200, height: 50, color: "#ffe14d", opacity: 0.4 },
+      ],
+    },
+  });
+  const rects = drawnRects(PDFLib);
+  assert.equal(rects.length, 1);
+  const rect = rects[0];
+  // For rotation 270: pageToVisual({x:100, y:100}, 612, 792, 270) = {x: 692, y: 100}
+  // pageToVisual({x:300, y:100}) = {x: 692, y: 300}
+  // pageToVisual({x:300, y:150}) = {x: 642, y: 300}
+  // pageToVisual({x:100, y:150}) = {x: 642, y: 100}
+  // Visual bounds: x in [642, 692], y in [100, 300]
+  // Back to page space (r=270): visualToPage({x:642,y:100}) = {x:100,y:150}, visualToPage({x:692,y:300}) = {x:300,y:100}
+  // So rect in page space: x=100, y=100, width=200, height=50
+  assert.equal(rect.x, 100);
+  assert.equal(rect.y, 100);
+  assert.equal(rect.width, 200);
+  assert.equal(rect.height, 50);
+});
+
+test("exportPages uses custom highlight color and opacity", async (t) => {
+  const PDFLib = makePDFLib();
+  const exporter = createExporter({ PDFLib });
+  const pages = [{ id: "p1", sourceId: "s1", index: 0, rotated: 0 }];
+  const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 1 }]]);
+  await exporter.exportPages({
+    pages, getSource: (id) => sources.get(id), fileName: "x",
+    exportMode: "all", selected: new Set(),
+    annotations: {
+      p1: [
+        { id: "h1", type: "highlight", x: 0, y: 0, width: 100, height: 100, color: "#ff0000", opacity: 0.7 },
+      ],
+    },
+  });
+  const rects = drawnRects(PDFLib);
+  assert.equal(rects.length, 1);
+  assert.deepStrictEqual(rects[0].color, [1, 0, 0]); // #ff0000
+  assert.equal(rects[0].opacity, 0.7);
+});
+
+test("exportPages does not draw empty text annotations", async (t) => {
+  const PDFLib = makePDFLib();
+  const exporter = createExporter({ PDFLib });
+  const pages = [{ id: "p1", sourceId: "s1", index: 0, rotated: 0 }];
+  const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 1 }]]);
+  await exporter.exportPages({
+    pages, getSource: (id) => sources.get(id), fileName: "x",
+    exportMode: "all", selected: new Set(),
+    annotations: {
+      p1: [
+        { id: "a1", type: "text", x: 100, y: 100, text: "", fontSize: 14, color: "#000000" },
+        { id: "a2", type: "text", x: 100, y: 200, text: "   ", fontSize: 14, color: "#000000" },
+        { id: "a3", type: "text", x: 100, y: 300, text: "Valid", fontSize: 14, color: "#000000" },
+      ],
+    },
+  });
+  const drawn = drawnTexts(PDFLib);
+  // 1 page number + 1 valid annotation = 2 drawText calls
+  assert.equal(drawn.length, 2);
+  const ann = drawn.find((d) => d.text === "Valid");
+  assert.ok(ann);
+});
+
+test("exportPages does not draw zero-size highlights", async (t) => {
+  const PDFLib = makePDFLib();
+  const exporter = createExporter({ PDFLib });
+  const pages = [{ id: "p1", sourceId: "s1", index: 0, rotated: 0 }];
+  const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 1 }]]);
+  await exporter.exportPages({
+    pages, getSource: (id) => sources.get(id), fileName: "x",
+    exportMode: "all", selected: new Set(),
+    annotations: {
+      p1: [
+        { id: "h1", type: "highlight", x: 0, y: 0, width: 0, height: 100, color: "#ffe14d", opacity: 0.4 },
+        { id: "h2", type: "highlight", x: 0, y: 0, width: 100, height: 0, color: "#ffe14d", opacity: 0.4 },
+        { id: "h3", type: "highlight", x: 0, y: 0, width: 100, height: 100, color: "#ffe14d", opacity: 0.4 },
+      ],
+    },
+  });
+  const rects = drawnRects(PDFLib);
+  assert.equal(rects.length, 1); // Only the valid one
+  assert.equal(rects[0].width, 100);
+  assert.equal(rects[0].height, 100);
+});
+
+test("exportPages handles annotations for multiple pages", async (t) => {
+  const PDFLib = makePDFLib();
+  const exporter = createExporter({ PDFLib });
+  const pages = [
+    { id: "p1", sourceId: "s1", index: 0, rotated: 0 },
+    { id: "p2", sourceId: "s1", index: 1, rotated: 0 },
+    { id: "p3", sourceId: "s1", index: 2, rotated: 0 },
+  ];
+  const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 3 }]]);
+  await exporter.exportPages({
+    pages, getSource: (id) => sources.get(id), fileName: "x",
+    exportMode: "all", selected: new Set(),
+    pageNumbers: { mode: "all", format: "n", skipFirst: false, position: "bottom-center", start: 1, fontSize: 10, margin: 36, applyTo: "all" },
+    annotations: {
+      p1: [{ id: "a1", type: "text", x: 0, y: 0, text: "Page 1", fontSize: 14, color: "#000000" }],
+      p3: [{ id: "a2", type: "text", x: 0, y: 0, text: "Page 3", fontSize: 14, color: "#000000" }],
+    },
+  });
+  const drawn = drawnTexts(PDFLib);
+  // 3 page numbers + 2 annotations = 5 drawText calls
+  assert.equal(drawn.length, 5);
+  const texts = drawn.map((d) => d.text);
+  assert.ok(texts.includes("Page 1"));
+  assert.ok(texts.includes("Page 3"));
+});
+
+test("exportPages exports selected pages with their annotations", async (t) => {
+  const PDFLib = makePDFLib();
+  const exporter = createExporter({ PDFLib });
+  const pages = [
+    { id: "p1", sourceId: "s1", index: 0, rotated: 0 },
+    { id: "p2", sourceId: "s1", index: 1, rotated: 0 },
+  ];
+  const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 2 }]]);
+  await exporter.exportPages({
+    pages, getSource: (id) => sources.get(id), fileName: "x",
+    exportMode: "selected", selected: new Set(["p2"]),
+    pageNumbers: { mode: "selected", format: "n", skipFirst: false, position: "bottom-center", start: 1, fontSize: 10, margin: 36, applyTo: "selected" },
+    annotations: {
+      p1: [{ id: "a1", type: "text", x: 0, y: 0, text: "Page 1", fontSize: 14, color: "#000000" }],
+      p2: [{ id: "a2", type: "text", x: 0, y: 0, text: "Page 2", fontSize: 14, color: "#000000" }],
+    },
+  });
+  const drawn = drawnTexts(PDFLib);
+  // 1 page number (for selected page) + 1 annotation = 2 drawText calls
+  assert.equal(drawn.length, 2);
+  const texts = drawn.map((d) => d.text);
+  assert.ok(texts.includes("Page 2"));
+  assert.ok(!texts.includes("Page 1"));
 });

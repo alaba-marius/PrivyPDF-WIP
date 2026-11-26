@@ -38,11 +38,99 @@ export function createExporter({ PDFLib } = {}) {
     }
   }
 
+  // Convert hex color string to pdf-lib rgb
+  function hexToRgb(rgb, hex) {
+    const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    if (!m) return rgb(0, 0, 0);
+    return rgb(
+      parseInt(m[1], 16) / 255,
+      parseInt(m[2], 16) / 255,
+      parseInt(m[3], 16) / 255
+    );
+  }
+
+  // Draw text annotations on a page
+  async function drawAnnotations(outPage, annotations, pageW, pageH, effectiveRotation, rgb, fontCache, degrees) {
+    if (!annotations || !annotations.length) return;
+
+    // Load Helvetica font for annotations (shared with page numbers)
+    if (!fontCache.Helvetica) {
+      fontCache.Helvetica = await outPage.doc.embedFont(fontCache.StandardFonts.Helvetica);
+    }
+    const font = fontCache.Helvetica;
+
+    for (const ann of annotations) {
+      if (ann.type === "text") {
+        // Text annotation: stored in page space (bottom-left origin, y up).
+        // pdf-lib drawText expects page-space coordinates and rotates COUNTERCLOCKWISE.
+        // To appear upright on a page rotated R° clockwise, we rotate CCW by R°.
+        // Pass page-space coordinates directly - NO visual space conversion.
+        const text = ann.text || "";
+        if (!text) continue;
+
+        const fontSize = ann.fontSize || 14;
+        const textColor = ann.color ? hexToRgb(rgb, ann.color) : rgb(0, 0, 0);
+
+        // Handle multi-line text: split on \n, draw each line with line height
+        // Lines stack DOWN in visual orientation at all rotations.
+        // Page-space offset for line k (0-indexed):
+        //   dx = k * lineHeight * sin(t)
+        //   dy = -k * lineHeight * cos(t)
+        // where t = effectiveRotation in radians, lineHeight = 1.2 * fontSize.
+        // Round to 3 decimals to avoid -0 and float noise.
+        const lines = text.split("\n");
+        const lineHeight = fontSize * 1.2; // typical leading
+        const rad = (effectiveRotation * Math.PI) / 180;
+        const sin = Math.sin(rad);
+        const cos = Math.cos(rad);
+
+        for (let k = 0; k < lines.length; k++) {
+          const line = lines[k];
+          if (!line && k === lines.length - 1) continue; // skip trailing empty line
+
+          const dx = Number((k * lineHeight * sin).toFixed(3));
+          const dy = Number((-k * lineHeight * cos).toFixed(3));
+
+          outPage.drawText(line, {
+            x: ann.x + dx,
+            y: ann.y + dy,
+            size: fontSize,
+            font,
+            color: textColor,
+            rotate: degrees(effectiveRotation),
+          });
+        }
+      } else if (ann.type === "highlight") {
+        // Highlight: stored in page space (x, y, width, height).
+        // pdf-lib drawRectangle works in page space - use stored values directly.
+        // NO coordinate conversion needed.
+        const x = ann.x || 0;
+        const y = ann.y || 0;
+        const width = ann.width || 0;
+        const height = ann.height || 0;
+        if (width <= 0 || height <= 0) continue;
+
+        const highlightColor = ann.color ? hexToRgb(rgb, ann.color) : rgb(1, 0.88, 0.3); // default yellow
+        const opacity = Math.max(0, Math.min(1, ann.opacity ?? 0.4));
+
+        outPage.drawRectangle({
+          x,
+          y,
+          width,
+          height,
+          color: highlightColor,
+          opacity,
+        });
+      }
+    }
+  }
+
   async function exportPages({
     pages, getSource, fileName, exportMode, selected,
     pageNumbers = { mode: "none" },
     watermark = { text: "", enabled: false },
     metadata = {},
+    annotations = {}, // pageId -> annotations[]
   } = {}) {
     const lib = await getPDFLib();
     const { PDFDocument, degrees, StandardFonts, rgb } = lib;
@@ -61,6 +149,9 @@ export function createExporter({ PDFLib } = {}) {
     const pageNumberFont = await outDoc.embedFont(StandardFonts.Helvetica);
     const watermarkFont = await outDoc.embedFont(StandardFonts.HelveticaBold);
     const pageNumberColor = rgb(PAGE_NUMBER_GRAY, PAGE_NUMBER_GRAY, PAGE_NUMBER_GRAY);
+
+    // Font cache for annotations
+    const fontCache = { StandardFonts, Helvetica: null };
 
     const sourceDocs = new Map(); // source id -> opened pdf-lib document
     let processed = 0;
@@ -157,6 +248,10 @@ export function createExporter({ PDFLib } = {}) {
           rotate: degrees(rotateDegrees),
         });
       }
+
+      // --- Annotations ------------------------------------------------------
+      const pageAnnotations = annotations[page.id] || [];
+      await drawAnnotations(outPage, pageAnnotations, pageW, pageH, effectiveRotation, rgb, fontCache, degrees);
 
       processed++;
       // Yield to the main thread every few pages so long exports stay

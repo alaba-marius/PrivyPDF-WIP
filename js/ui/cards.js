@@ -159,7 +159,7 @@ export function mountGrid(gridEl, addTileEl, workareaEl, opts = {}) {
 
   // ---------- Card building ----------
 
-  function buildCard(page, number, selected, focusedId, index) {
+  function buildCard(page, number, selected, focusedId, index, annotations) {
     const card = document.createElement("div");
     card.className = "page-card";
     card.setAttribute("role", "option");
@@ -175,6 +175,15 @@ export function mountGrid(gridEl, addTileEl, workareaEl, opts = {}) {
       const sheet = card.querySelector(".ds-sheet");
       sheet.classList.add("ds-sheet--selected");
       sheet.insertAdjacentHTML("beforeend", checkMarkup());
+    }
+    // Annotation badge
+    const annCount = annotations[page.id]?.length || 0;
+    if (annCount > 0) {
+      const badge = document.createElement("span");
+      badge.className = "annotation-badge";
+      badge.textContent = annCount;
+      badge.setAttribute("aria-label", `${annCount} annotation${annCount !== 1 ? "s" : ""}`);
+      card.appendChild(badge);
     }
     const num = document.createElement("span");
     num.className = "page-number";
@@ -198,7 +207,7 @@ export function mountGrid(gridEl, addTileEl, workareaEl, opts = {}) {
     if (!on && check) check.remove();
   }
 
-  function syncCard(card, page, number, selected, focusedId, index, total) {
+  function syncCard(card, page, number, selected, focusedId, index, total, annotations) {
     card.tabIndex = page.id === focusedId ? 0 : -1;
     if (selected.has(page.id)) card.setAttribute("aria-selected", "true");
     else card.removeAttribute("aria-selected");
@@ -207,6 +216,20 @@ export function mountGrid(gridEl, addTileEl, workareaEl, opts = {}) {
     let label = `Page ${number} of ${total} from ${sourceName}`;
     const rotate = effectiveRotation(page);
     if (rotate) label += `, rotated ${rotate} degrees`;
+    // Update annotation badge
+    const annCount = annotations[page.id]?.length || 0;
+    let badge = card.querySelector(".annotation-badge");
+    if (annCount > 0) {
+      if (!badge) {
+        badge = document.createElement("span");
+        badge.className = "annotation-badge";
+        card.appendChild(badge);
+      }
+      badge.textContent = annCount;
+      badge.setAttribute("aria-label", `${annCount} annotation${annCount !== 1 ? "s" : ""}`);
+    } else if (badge) {
+      badge.remove();
+    }
     card.setAttribute("aria-label", label);
     card.querySelector(".page-number").textContent = number;
 
@@ -237,6 +260,7 @@ export function mountGrid(gridEl, addTileEl, workareaEl, opts = {}) {
       const state = getState();
       const pages = state.pages;
       const selected = new Set(state.selected);
+      const annotations = state.annotations || {};
       const targetIds = new Set(pages.map((page) => page.id));
 
       // Drop cards for pages that no longer exist.
@@ -258,11 +282,11 @@ export function mountGrid(gridEl, addTileEl, workareaEl, opts = {}) {
         const number = index + 1;
         let card = cards.get(page.id);
         if (!card) {
-          card = buildCard(page, number, selected, state.focusedId, index);
+          card = buildCard(page, number, selected, state.focusedId, index, annotations);
           cards.set(page.id, card);
         }
         gridEl.appendChild(card);
-        syncCard(card, page, number, selected, state.focusedId, index, pages.length);
+        syncCard(card, page, number, selected, state.focusedId, index, pages.length, annotations);
       }
       gridEl.appendChild(addTileEl);
 
