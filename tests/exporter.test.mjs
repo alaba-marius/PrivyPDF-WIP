@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createExporter } from "../js/core/exporter.js";
+import { registerRawBytes } from "../js/core/image-assets.js";
 
 function makePDFLib() {
   const ops = [];
@@ -16,7 +17,10 @@ function makePDFLib() {
         rotation = angle.angle ?? angle;
         ops.push(["setRotation", index, rotation]);
       },
-      drawImage() {},
+      drawImage(embed, opts) {
+        if (opts && typeof opts !== "object") throw new Error("drawImage opts must be object");
+        ops.push(["drawImage", { ...opts }]);
+      },
       drawText(text, opts) {
         if (typeof text !== "string") throw new Error("drawText text must be string");
         if (opts && typeof opts !== "object") throw new Error("drawText opts must be object");
@@ -729,4 +733,152 @@ test("exportPages exports selected pages with their annotations", async (t) => {
   const texts = drawn.map((d) => d.text);
   assert.ok(texts.includes("Page 2"));
   assert.ok(!texts.includes("Page 1"));
+});
+
+// --- Image annotation tests ---
+
+function drawnImages(PDFLib) {
+  return PDFLib.ops.filter((o) => o[0] === "drawImage").map((o) => o[1]);
+}
+
+function embedCalls(PDFLib) {
+  return PDFLib.ops.filter((o) => o[0] === "embedJpg" || o[0] === "embedPng");
+}
+
+function registerJpegAsset(assetId, bytes = new Uint8Array([0xff, 0xd8, 0xff])) {
+  return registerRawBytes({ assetId, mimeType: "image/jpeg", width: 200, height: 100, bytes });
+}
+
+function registerPngAsset(assetId, bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47])) {
+  return registerRawBytes({ assetId, mimeType: "image/png", width: 100, height: 200, bytes });
+}
+
+test("exportPages draws image annotation with options object, not positional args", async (t) => {
+  registerJpegAsset("img1");
+  const PDFLib = makePDFLib();
+  const exporter = createExporter({ PDFLib });
+  const pages = [{ id: "p1", sourceId: "s1", index: 0, rotated: 0 }];
+  const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 1 }]]);
+  await exporter.exportPages({
+    pages, getSource: (id) => sources.get(id), fileName: "x", exportMode: "all", selected: new Set(),
+    annotations: {
+      p1: [{ id: "a1", type: "image", assetId: "img1", x: 100, y: 100, width: 200, height: 100, opacity: 0.5 }],
+    },
+  });
+  const images = drawnImages(PDFLib);
+  assert.equal(images.length, 1);
+  const img = images[0];
+  // Options object form (x/y/width/height/rotate/opacity), not positional args
+  assert.equal(img.x, 100);
+  assert.equal(img.y, 100);
+  assert.equal(img.width, 200);
+  assert.equal(img.height, 100);
+  assert.equal(img.rotate.angle, 0); // rotation 0
+  assert.equal(img.opacity, 0.5);
+  // JPEG -> embedJpg called once with the asset bytes
+  assert.deepStrictEqual(embedCalls(PDFLib), [["embedJpg", 3]]);
+});
+
+test("exportPages draws PNG image via embedPng", async (t) => {
+  registerPngAsset("img2");
+  const PDFLib = makePDFLib();
+  const exporter = createExporter({ PDFLib });
+  const pages = [{ id: "p1", sourceId: "s1", index: 0, rotated: 0 }];
+  const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 1 }]]);
+  await exporter.exportPages({
+    pages, getSource: (id) => sources.get(id), fileName: "x", exportMode: "all", selected: new Set(),
+    annotations: {
+      p1: [{ id: "a1", type: "image", assetId: "img2", x: 0, y: 0, width: 100, height: 200 }],
+    },
+  });
+  const images = drawnImages(PDFLib);
+  assert.equal(images.length, 1);
+  assert.deepStrictEqual(embedCalls(PDFLib), [["embedPng", 4]]);
+});
+
+test("exportPages draws image rotated per derivation B at 90/180/270", async (t) => {
+  registerJpegAsset("img3");
+  const cases = [
+    { rotated: 0,   expectX: 100, expectY: 100, expectW: 200, expectH: 100, expectRotate: 0 },
+    { rotated: 90,  expectX: 300, expectY: 100, expectW: 100, expectH: 200, expectRotate: 90 },
+    { rotated: 180, expectX: 300, expectY: 200, expectW: 200, expectH: 100, expectRotate: 180 },
+    { rotated: 270, expectX: 100, expectY: 200, expectW: 100, expectH: 200, expectRotate: 270 },
+  ];
+  for (const c of cases) {
+    const PDFLib = makePDFLib();
+    const exporter = createExporter({ PDFLib });
+    const pages = [{ id: "p1", sourceId: "s1", index: 0, rotated: c.rotated }];
+    const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 1 }]]);
+    await exporter.exportPages({
+      pages, getSource: (id) => sources.get(id), fileName: "x", exportMode: "all", selected: new Set(),
+      annotations: {
+        p1: [{ id: "a1", type: "image", assetId: "img3", x: 100, y: 100, width: 200, height: 100 }],
+      },
+    });
+    const images = drawnImages(PDFLib);
+    assert.equal(images.length, 1, `rot ${c.rotated}: one drawImage`);
+    const img = images[0];
+    assert.equal(img.x, c.expectX, `rot ${c.rotated}: x`);
+    assert.equal(img.y, c.expectY, `rot ${c.rotated}: y`);
+    assert.equal(img.width, c.expectW, `rot ${c.rotated}: width`);
+    assert.equal(img.height, c.expectH, `rot ${c.rotated}: height`);
+    assert.equal(img.rotate.angle, c.expectRotate, `rot ${c.rotated}: rotate`);
+  }
+});
+
+test("exportPages embeds the same image asset once even when used on multiple pages", async (t) => {
+  registerJpegAsset("img4");
+  const PDFLib = makePDFLib();
+  const exporter = createExporter({ PDFLib });
+  const pages = [
+    { id: "p1", sourceId: "s1", index: 0, rotated: 0 },
+    { id: "p2", sourceId: "s1", index: 1, rotated: 0 },
+  ];
+  const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 2 }]]);
+  await exporter.exportPages({
+    pages, getSource: (id) => sources.get(id), fileName: "x", exportMode: "all", selected: new Set(),
+    annotations: {
+      p1: [{ id: "a1", type: "image", assetId: "img4", x: 0, y: 0, width: 100, height: 100 }],
+      p2: [{ id: "a2", type: "image", assetId: "img4", x: 50, y: 50, width: 100, height: 100 }],
+    },
+  });
+  const images = drawnImages(PDFLib);
+  assert.equal(images.length, 2, "one drawImage per page");
+  // The asset is embedded once (cached per exportPages call)
+  assert.deepStrictEqual(embedCalls(PDFLib), [["embedJpg", 3]]);
+});
+
+test("exportPages skips image annotation with zero size", async (t) => {
+  registerJpegAsset("img5");
+  const PDFLib = makePDFLib();
+  const exporter = createExporter({ PDFLib });
+  const pages = [{ id: "p1", sourceId: "s1", index: 0, rotated: 0 }];
+  const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 1 }]]);
+  await exporter.exportPages({
+    pages, getSource: (id) => sources.get(id), fileName: "x", exportMode: "all", selected: new Set(),
+    annotations: {
+      p1: [
+        { id: "a1", type: "image", assetId: "img5", x: 0, y: 0, width: 0, height: 100 },
+        { id: "a2", type: "image", assetId: "img5", x: 0, y: 0, width: 100, height: 0 },
+        { id: "a3", type: "image", assetId: "img5", x: 0, y: 0, width: 100, height: 100 },
+      ],
+    },
+  });
+  const images = drawnImages(PDFLib);
+  assert.equal(images.length, 1, "only the valid-size image is drawn");
+});
+
+test("exportPages skips image annotation with a missing asset", async (t) => {
+  const PDFLib = makePDFLib();
+  const exporter = createExporter({ PDFLib });
+  const pages = [{ id: "p1", sourceId: "s1", index: 0, rotated: 0 }];
+  const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 1 }]]);
+  await exporter.exportPages({
+    pages, getSource: (id) => sources.get(id), fileName: "x", exportMode: "all", selected: new Set(),
+    annotations: {
+      p1: [{ id: "a1", type: "image", assetId: "does-not-exist", x: 0, y: 0, width: 100, height: 100 }],
+    },
+  });
+  assert.deepStrictEqual(drawnImages(PDFLib), []);
+  assert.deepStrictEqual(embedCalls(PDFLib), []);
 });

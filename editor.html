@@ -37,7 +37,7 @@
         <nav class="rail ds-rail" id="rail">
           <button class="ds-rail-item ds-rail-item--active" id="rail-pages" aria-current="true" data-tool="pages"><i data-icon="layers"></i><span>Pages</span></button>
           <button class="ds-rail-item" data-tool="merge" id="rail-merge" aria-label="Add PDFs to merge"><i data-icon="file-plus"></i><span>Merge</span></button>
-          <button class="ds-rail-item" data-tool="images" id="rail-images" aria-label="Add images as pages"><i data-icon="image"></i><span>Images</span></button>
+          <button class="ds-rail-item" data-tool="images" id="rail-images" aria-label="Add image files"><i data-icon="upload"></i><span>Add files</span></button>
           <button class="ds-rail-item" data-tool="extract" id="rail-extract" aria-label="Extract selected pages"><i data-icon="scissors"></i><span>Extract</span></button>
           <div class="rail-divider" aria-hidden="true"></div>
           <button class="ds-rail-item" data-tool="annotate" id="rail-annotate" aria-label="Annotate pages"><i data-icon="pen"></i><span>Annotate</span></button>
@@ -66,7 +66,7 @@
                   <div class="empty-icon"><i data-icon="file-plus"></i></div>
                   <div class="empty-title">Drop PDFs or images to begin</div>
                 </div>
-                <div class="empty-sub">or click to choose files · PDF, JPG and PNG</div>
+                <div class="empty-sub">or click to choose files · PDF, JPG, PNG and WebP</div>
                 <span class="ds-badge-light">Processed on this device only</span>
               </div>
             </div>
@@ -134,6 +134,23 @@
                     <button class="ds-color-swatch" data-color="#aa00aa"></button>
                     <button class="ds-color-swatch" data-color="#00aaaa"></button>
                   </div>
+                </div>
+              </div>
+              <!-- Image options -->
+              <div class="annotate-image-options" id="annotate-image-options" hidden>
+                <p class="annotate-image-hint" id="annotate-image-hint">Insert image: choose an image to place on the page.</p>
+                <div class="ds-form-field">
+                  <label class="ds-field-label" for="annotate-image-opacity">Opacity</label>
+                  <input class="ds-input" id="annotate-image-opacity" type="range" min="5" max="100" value="100" />
+                </div>
+                <div class="ds-form-field">
+                  <label class="ds-field-label" for="annotate-image-keep-proportions">Keep proportions</label>
+                  <input id="annotate-image-keep-proportions" type="checkbox" checked />
+                </div>
+                <div class="ds-stack ds-stack--sm annotate-image-actions">
+                  <button class="ds-btn ds-btn--sm" id="annotate-image-choose">Choose image</button>
+                  <button class="ds-btn ds-btn--sm ds-btn--ghost" id="annotate-image-replace">Replace image</button>
+                  <button class="ds-btn ds-btn--sm ds-btn--ghost" id="annotate-image-delete">Delete</button>
                 </div>
               </div>
             </div>

@@ -3,12 +3,14 @@
 
 import { hydrateIcons } from "../icons.js";
 import { getSource } from "../core/sources.js";
+import { registerAsset, getAsset, computeImagePlacement } from "../core/image-assets.js";
 import {
   computePageLayout,
   findCurrentPage,
   getRenderWindow,
   screenToPageForBlock,
   pageToScreenForBlock,
+  pageRectToScreen,
   visualToPage,
   pageToVisual,
   visualDims,
@@ -23,15 +25,17 @@ import {
   getPageAnnotations,
   createTextAnnotation,
   createHighlightAnnotation,
+  createImageAnnotation,
   DEFAULT_TEXT_FONT_SIZE,
   DEFAULT_TEXT_COLOR,
   DEFAULT_HIGHLIGHT_COLOR,
   DEFAULT_HIGHLIGHT_OPACITY,
+  DEFAULT_IMAGE_OPACITY,
   validateTextForHelvetica,
   annotationDefaultsFromState,
 } from "../core/annotations.js";
 
-const TOOLS = ["select", "text", "highlight"];
+const TOOLS = ["select", "text", "highlight", "image"];
 const TEXT_PRESET_SIZES = [8, 10, 12, 14, 16, 18, 24, 36, 48, 72];
 const TEXT_PRESET_COLORS = [
   "#000000", "#ffffff", "#ff0000", "#0066ff", "#00aa00", "#ff8800", "#aa00aa", "#00aaaa",
@@ -43,24 +47,11 @@ const HIGHLIGHT_PRESET_COLORS = [
 // CSS classes for the annotate view
 const ANNOTATE_VIEW_HTML = `
 <div class="annotate-view" id="annotate-view" role="region" aria-label="Annotate pages" hidden>
-  <div class="annotate-toolbar" role="toolbar" aria-label="Annotation tools">
-    <div class="annotate-tool-group">
-      <button class="ds-btn ds-btn--sm annotate-tool" data-tool="select" aria-pressed="true" title="Select (V)">
-        <i data-icon="mouse-pointer-2"></i><span>Select</span>
-      </button>
-      <button class="ds-btn ds-btn--sm annotate-tool" data-tool="text" aria-pressed="false" title="Text (T)">
-        <i data-icon="type"></i><span>Text</span>
-      </button>
-      <button class="ds-btn ds-btn--sm annotate-tool" data-tool="highlight" aria-pressed="false" title="Highlight (H)">
-        <i data-icon="highlighter"></i><span>Highlight</span>
-      </button>
-      <button class="ds-btn ds-btn--sm ds-btn--outline annotate-undo" id="annotate-undo" aria-label="Undo"><i data-icon="rotate-ccw"></i></button>
-      <button class="ds-btn ds-btn--sm ds-btn--outline annotate-redo" id="annotate-redo" aria-label="Redo"><i data-icon="rotate-cw"></i></button>
-    </div>
-    <div class="annotate-page-nav" id="annotate-page-nav">
-      <span class="annotate-page-indicator" id="annotate-page-indicator">Page 1 of 1</span>
-      <input class="ds-input annotate-page-jump" id="annotate-page-jump" type="number" min="1" max="1" aria-label="Jump to page">
-    </div>
+  <div class="annotate-top-bar" role="toolbar" aria-label="Annotation tools">
+    <span class="annotate-title">Annotate</span>
+    <span class="annotate-page-indicator" id="annotate-page-indicator">Page 1 of 1</span>
+    <button class="ds-btn ds-btn--sm ds-btn--outline annotate-undo" id="annotate-undo" aria-label="Undo"><i data-icon="rotate-ccw"></i></button>
+    <button class="ds-btn ds-btn--sm ds-btn--outline annotate-redo" id="annotate-redo" aria-label="Redo"><i data-icon="rotate-cw"></i></button>
     <div class="annotate-zoom" id="annotate-zoom-controls">
       <button class="ds-icon-btn" id="annotate-zoom-out" aria-label="Zoom out"><i data-icon="minus"></i></button>
       <span id="annotate-zoom-level">100%</span>
@@ -70,11 +61,28 @@ const ANNOTATE_VIEW_HTML = `
     <button class="ds-btn ds-btn--sm ds-btn--primary annotate-done" id="annotate-done" aria-label="Done annotating"><i data-icon="check"></i><span>Done</span></button>
   </div>
 
+  <!-- Floating tool palette: positioned by JS at the left edge of the page area,
+       next to the rail's Annotate item. Becomes a horizontal bar under 900px. -->
+  <div class="annotate-tool-palette" id="annotate-tool-palette" role="toolbar" aria-label="Annotation tools">
+    <button class="annotate-palette-btn annotate-tool" data-tool="select" aria-pressed="true" title="Select (V)"><i data-icon="mouse-pointer-2"></i></button>
+    <button class="annotate-palette-btn annotate-tool" data-tool="text" aria-pressed="false" title="Text (T)"><i data-icon="type"></i></button>
+    <button class="annotate-palette-btn annotate-tool" data-tool="highlight" aria-pressed="false" title="Highlight (H)"><i data-icon="highlighter"></i></button>
+    <button class="annotate-palette-btn annotate-tool" data-tool="image" aria-pressed="false" title="Insert image (I)"><i data-icon="image"></i></button>
+  </div>
+
   <div class="annotate-pages-wrap" id="annotate-pages-wrap">
     <div class="annotate-pages" id="annotate-pages"></div>
   </div>
 </div>
 `;
+
+// Pure: viewport-relative `top` for the tool palette so the Text button's
+// center lines up with the Annotate rail item's center. `textButtonOffsetTop`
+// and `textButtonHeight` are measured against the palette (its offsetParent
+// once the palette is position: fixed).
+export function paletteTopForTextButton(railRect, textButtonOffsetTop, textButtonHeight) {
+  return railRect.top + railRect.height / 2 - (textButtonOffsetTop + textButtonHeight / 2);
+}
 
 export function mountAnnotateView(root, opts = {}) {
   const { getState, getSource, updateAnnotations, onDone } = opts;
@@ -93,10 +101,20 @@ export function mountAnnotateView(root, opts = {}) {
   let currentPageId = null; // The page most visible in the scroll area
   let isDragging = false;
   let dragStart = { x: 0, y: 0 };
+  let dragStartPage = { x: 0, y: 0 }; // page-space point where the drag started
   let dragAnnotationStart = { x: 0, y: 0 };
   let isDrawingHighlight = false;
   let highlightStart = { x: 0, y: 0 };
   let highlightPageId = null;
+  // Image annotation drag/resize state
+  let isDraggingImage = false;
+  let isResizingImage = false;
+  let imageDragStart = { x: 0, y: 0 }; // page-space anchor where drag started
+  let imageDragStartPos = { x: 0, y: 0 }; // annotation's original position at drag start
+  let imageDragOffset = { x: 0, y: 0 }; // accumulated offset during drag (committed on pointerup)
+  let imageResizeStart = { x: 0, y: 0, width: 0, height: 0 };
+  let imageResizeCorner = null; // "nw" | "ne" | "sw" | "se"
+  let imagePageId = null;
   let textInput = null;
   let zoom = 1; // Will be set to fit-width zoom on enter()
   let pdfjsDoc = null;
@@ -128,6 +146,7 @@ export function mountAnnotateView(root, opts = {}) {
   let layout = { blocks: [], totalHeight: 0 };
   let resizeHandler = null;
   let scrollHandler = null;
+  let paletteResizeObserver = null;
   let intersectionObserver = null;
   let documentKeyDownHandler = null; // Document-level Delete/Backspace handler (added in enter, removed in cleanup)
   let pendingTextInput = null; // For deferred text input creation
@@ -142,7 +161,6 @@ export function mountAnnotateView(root, opts = {}) {
   const pagesWrap = $("annotate-pages-wrap");
   const pagesEl = $("annotate-pages");
   const pageIndicator = $("annotate-page-indicator");
-  const pageJump = $("annotate-page-jump");
   const doneBtn = $("annotate-done");
   const hintEl = null; // We'll use the panel hint instead
   const zoomLevelEl = $("annotate-zoom-level");
@@ -152,15 +170,15 @@ export function mountAnnotateView(root, opts = {}) {
   const undoBtn = $("annotate-undo");
   const redoBtn = $("annotate-redo");
 
-  // Tool buttons
-  const toolButtons = view.querySelectorAll(".annotate-tool");
+  // Tool palette (floating) + its buttons
+  const palette = view.querySelector("#annotate-tool-palette");
+  const paletteButtons = view.querySelectorAll(".annotate-tool");
 
   function updateToolButtons() {
-    toolButtons.forEach((btn) => {
+    paletteButtons.forEach((btn) => {
       const isActive = btn.dataset.tool === currentTool;
       btn.setAttribute("aria-pressed", String(isActive));
-      btn.classList.toggle("ds-btn--primary", isActive);
-      btn.classList.toggle("ds-btn--outline", !isActive);
+      btn.classList.toggle("annotate-palette-btn--active", isActive);
     });
     // Update undo/redo button states
     if (undoBtn) undoBtn.disabled = !opts.store?.canUndo?.();
@@ -188,8 +206,10 @@ export function mountAnnotateView(root, opts = {}) {
   function setTool(tool) {
     if (!TOOLS.includes(tool)) return;
     cancelTextInput();
-    // Clear selection on tool change
-    if (selectedAnnotationId) {
+    // Keep an existing selection when switching to the select tool (e.g. right
+    // after placing an image, so it can be dragged immediately). Clear the
+    // selection for any other tool change.
+    if (selectedAnnotationId && tool !== "select") {
       selectedAnnotationId = null;
       selectedPageId = null;
       publishSelection();
@@ -207,6 +227,22 @@ export function mountAnnotateView(root, opts = {}) {
       renderAllOverlays();
     }
     pendingTextInput = null;
+  }
+
+  // Open a file picker limited to images and return the selected File (or null).
+  function pickImageFile() {
+    let resolveFile = null;
+    const promise = new Promise((res) => { resolveFile = res; });
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp";
+    input.style.display = "none";
+    document.body.appendChild(input);
+    input.onchange = () => resolveFile(input.files?.[0] ?? null);
+    input.oncancel = () => resolveFile(null);
+    input.click();
+    document.body.removeChild(input);
+    return promise;
   }
 
   function commitTextInput() {
@@ -442,9 +478,6 @@ export function mountAnnotateView(root, opts = {}) {
         pageCanvases.delete(pageId);
       }
     }
-
-    // Update page jump max
-    pageJump.max = state.pages.length;
   }
 
   // Release bitmap for a page (keep canvas element for layout, clear bitmap)
@@ -626,6 +659,8 @@ export function mountAnnotateView(root, opts = {}) {
         renderTextAnnotation(ann, page, rotation, visualWidth, visualHeight, overlay);
       } else if (ann.type === "highlight") {
         renderHighlightAnnotation(ann, page, rotation, visualWidth, visualHeight, overlay);
+      } else if (ann.type === "image") {
+        renderImageAnnotation(ann, page, rotation, visualWidth, visualHeight, overlay);
       }
     }
 
@@ -807,6 +842,161 @@ export function mountAnnotateView(root, opts = {}) {
     overlay.appendChild(el);
   }
 
+  // Position the floating tool palette at the left edge of the page area,
+  // just right of the rail's Annotate item. The Text button's center lines up
+  // with the Annotate rail item's center. Under 900px it becomes a horizontal
+  // bar centered at the top of the page area (handled in CSS).
+  function positionPalette() {
+    if (!palette) return;
+    const railItem = document.getElementById("rail-annotate");
+    if (!railItem) return;
+    const isNarrow = window.innerWidth <= 900;
+    if (isNarrow) {
+      // Horizontal bar centered at the top of the page area.
+      palette.hidden = false;
+      palette.style.position = "fixed";
+      palette.style.left = "50%";
+      palette.style.top = "8px";
+      palette.style.transform = "translateX(-50%)";
+      palette.style.zIndex = "50";
+      return;
+    }
+    // Left edge of the page area (just right of the rail). Measure while
+    // visible and fixed so offsetTop is taken against the palette.
+    palette.hidden = false;
+    palette.style.position = "fixed";
+    palette.style.transform = "none";
+    palette.style.zIndex = "50";
+
+    const rect = railItem.getBoundingClientRect();
+    const left = rect.right + 8;
+    const textButton = palette.querySelector('[data-tool="text"]');
+    let top;
+    if (textButton) {
+      top = paletteTopForTextButton(rect, textButton.offsetTop, textButton.offsetHeight);
+    } else {
+      // Fallback: center the whole palette on the rail item.
+      const paletteRect = palette.getBoundingClientRect();
+      top = rect.top + (rect.height - paletteRect.height) / 2;
+    }
+    palette.style.left = `${Math.max(0, left)}px`;
+    palette.style.top = `${Math.max(0, top)}px`;
+  }
+
+  function renderImageAnnotation(ann, page, rotation, visualWidth, visualHeight, overlay) {
+    const asset = getAsset(ann.assetId);
+    if (!asset) return;
+
+    // Apply drag offset visually during drag (committed to store on pointerup)
+    const dragOffset = isDraggingImage && selectedAnnotationId === ann.id ? imageDragOffset : { x: 0, y: 0 };
+    const drawX = ann.x + dragOffset.x;
+    const drawY = ann.y + dragOffset.y;
+    const block = { pageW: page.width, pageH: page.height, visualW: visualWidth / zoom, visualH: visualHeight / zoom, rotation };
+    const rect = { left: 0, top: 0, width: visualWidth, height: visualHeight };
+    // Use all 4 corners so width/height stay positive at rotations 180/270
+    // (where pageToScreenForBlock flips the Y axis and a naive corner delta
+    // collapses to a negative size).
+    const screen = pageRectToScreen(drawX, drawY, ann.width, ann.height, block, rect);
+    if (!screen) return;
+
+    const el = document.createElement("div");
+    el.className = `annotate-image-annotation${ann.id === selectedAnnotationId ? " selected" : ""}`;
+    el.dataset.annotationId = ann.id;
+    el.style.left = `${screen.left}px`;
+    el.style.top = `${screen.top}px`;
+    el.style.width = `${screen.width}px`;
+    el.style.height = `${screen.height}px`;
+    el.style.backgroundImage = `url(${asset.dataUrl})`;
+    el.style.backgroundSize = "contain";
+    el.style.backgroundRepeat = "no-repeat";
+    el.style.backgroundPosition = "center";
+    el.style.opacity = ann.opacity ?? DEFAULT_IMAGE_OPACITY;
+    el.style.border = ann.id === selectedAnnotationId ? `2px solid var(--color-electric-capture-blue)` : "none";
+    el.tabIndex = -1;
+    el.setAttribute("role", "button");
+    el.setAttribute("aria-label", `Image annotation`);
+
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      el.focus();
+      selectAnnotation(ann.id, page.id);
+    });
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        deleteSelectedAnnotation();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        nudgeAnnotation(0, e.shiftKey ? -10 : -1);
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        nudgeAnnotation(0, e.shiftKey ? 10 : 1);
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        nudgeAnnotation(e.shiftKey ? -10 : -1, 0);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        nudgeAnnotation(e.shiftKey ? 10 : 1, 0);
+      }
+    });
+
+    overlay.appendChild(el);
+
+    if (ann.id === selectedAnnotationId) {
+      renderImageHandles(ann, page, rotation, visualWidth, visualHeight, overlay);
+    }
+  }
+
+  function renderImageHandles(ann, page, rotation, visualWidth, visualHeight, overlay) {
+    const asset = getAsset(ann.assetId);
+    if (!asset) return;
+
+    const block = { pageW: page.width, pageH: page.height, visualW: visualWidth / zoom, visualH: visualHeight / zoom, rotation };
+    const rect = { left: 0, top: 0, width: visualWidth, height: visualHeight };
+
+    const corners = [
+      { key: "nw", x: ann.x, y: ann.y },
+      { key: "ne", x: ann.x + ann.width, y: ann.y },
+      { key: "sw", x: ann.x, y: ann.y + ann.height },
+      { key: "se", x: ann.x + ann.width, y: ann.y + ann.height },
+    ];
+    // Apply drag offset visually during drag
+    const dragOffset = isDraggingImage && selectedAnnotationId === ann.id ? imageDragOffset : { x: 0, y: 0 };
+    const screenCorners = {};
+    for (const c of corners) {
+      const s = pageToScreenForBlock(c.x + dragOffset.x, c.y + dragOffset.y, block, rect);
+      if (s) screenCorners[c.key] = s;
+    }
+
+    const handleSize = 8;
+    const touchSize = 24;
+    const offset = (touchSize - handleSize) / 2;
+
+    for (const c of corners) {
+      const s = screenCorners[c.key];
+      if (!s) continue;
+      const el = document.createElement("div");
+      el.className = "annotate-image-handle";
+      el.dataset.corner = c.key;
+      el.style.left = `${s.clientX - offset}px`;
+      el.style.top = `${s.clientY - offset}px`;
+      el.style.width = `${touchSize}px`;
+      el.style.height = `${touchSize}px`;
+      el.style.position = "absolute";
+      const inner = document.createElement("div");
+      inner.style.position = "absolute";
+      inner.style.left = `${(touchSize - handleSize) / 2}px`;
+      inner.style.top = `${(touchSize - handleSize) / 2}px`;
+      inner.style.width = `${handleSize}px`;
+      inner.style.height = `${handleSize}px`;
+      inner.style.background = "#0d44e8";
+      inner.style.border = "1px solid #fff";
+      inner.style.boxSizing = "border-box";
+      el.appendChild(inner);
+      overlay.appendChild(el);
+    }
+  }
+
   function selectAnnotation(id, pageId) {
     selectedAnnotationId = id;
     selectedPageId = pageId;
@@ -909,6 +1099,26 @@ export function mountAnnotateView(root, opts = {}) {
 
   // Pointer event handlers
   function onPointerDown(e) {
+    // Handle image handle clicks (corner resize) first
+    const handle = e.target.closest(".annotate-image-handle");
+    if (handle && selectedAnnotationId && selectedPageId) {
+      e.preventDefault();
+      e.stopPropagation();
+      const corner = handle.dataset.corner;
+      if (!corner) return;
+      const page = getState().pages.find((p) => p.id === selectedPageId);
+      const ann = getPageAnnotations(getState().annotations || {}, selectedPageId).find((a) => a.id === selectedAnnotationId);
+      if (!page || !ann || ann.type !== "image") return;
+      isResizingImage = true;
+      imageResizeCorner = corner;
+      imageResizeStart = { x: ann.x, y: ann.y, width: ann.width, height: ann.height };
+      const canvasData = pageCanvases.get(selectedPageId);
+      const rect = canvasData ? canvasData.canvas.getBoundingClientRect() : null;
+      const start = screenToPageForBlock(e.clientX, e.clientY, canvasData.block, rect);
+      imageDragStart = start ? { x: start.x, y: start.y } : { x: e.clientX, y: e.clientY };
+      return;
+    }
+
     // Find which page wrapper was clicked
     const wrapper = e.target.closest(".annotate-page-wrapper");
     if (!wrapper) return;
@@ -938,11 +1148,59 @@ export function mountAnnotateView(root, opts = {}) {
       highlightStart = { ...pagePoint };
       dragAnnotationStart = { ...pagePoint };
       highlightPageId = pageId;
+    } else if (currentTool === "image") {
+      // Click to place an image: open file picker, then insert at click position.
+      // Placement is computed in visual space (centered on the visual click, aspect
+      // preserved, clamped) and converted to page space, so it stays correct at
+      // every rotation.
+      e.preventDefault();
+      const rotation = getEffectiveRotation(page);
+      pickImageFile().then(async (file) => {
+        if (!file) return;
+        try {
+          const { assetId, width: naturalWidth, height: naturalHeight } = await registerAsset(file);
+          const { x, y, width: placeW, height: placeH } = computeImagePlacement(
+            pagePoint.x,
+            pagePoint.y,
+            naturalWidth,
+            naturalHeight,
+            page.width,
+            page.height,
+            rotation,
+          );
+          const ann = createImageAnnotation(x, y, placeW, placeH, { assetId });
+          updateAnnotations((anns) => addAnnotation(anns, pageId, ann));
+          // Select the newly placed image
+          const pageAnns = getPageAnnotations(getState().annotations || {}, pageId);
+          selectedAnnotationId = pageAnns[pageAnns.length - 1]?.id;
+          selectedPageId = pageId;
+          publishSelection();
+          updateToolButtons();
+          renderAllOverlays();
+          // Switch to select so the newly placed image can be dragged immediately
+          setTool("select");
+        } catch (err) {
+          console.warn("Failed to insert image:", err);
+        }
+      });
     } else if (currentTool === "select") {
       // Check if clicking on an annotation
-      const annEl = e.target.closest(".annotate-text-annotation, .annotate-highlight-annotation");
+      const annEl = e.target.closest(".annotate-text-annotation, .annotate-highlight-annotation, .annotate-image-annotation");
       if (annEl) {
         selectAnnotation(annEl.dataset.annotationId, pageId);
+        const ann = getPageAnnotations(getState().annotations || {}, pageId).find((a) => a.id === selectedAnnotationId);
+        if (ann && ann.type === "image") {
+          // Start image drag (committed once on pointerup)
+          isDraggingImage = true;
+          imageDragStartPos = { x: ann.x, y: ann.y };
+          imageDragOffset = { x: 0, y: 0 };
+          imageDragStart = pagePoint;
+        } else if (ann) {
+          isDragging = true;
+          dragStart = { x: e.clientX, y: e.clientY };
+          dragStartPage = { ...pagePoint };
+          dragAnnotationStart = { x: ann.x, y: ann.y };
+        }
       } else {
         selectedAnnotationId = null;
         selectedPageId = null;
@@ -954,13 +1212,11 @@ export function mountAnnotateView(root, opts = {}) {
   }
 
   function onPointerMove(e) {
-    if (!isDrawingHighlight) return;
+    if (!isDrawingHighlight && !isDraggingImage && !isResizingImage && !isDragging) return;
 
     const wrapper = e.target.closest(".annotate-page-wrapper");
     if (!wrapper) return;
     const pageId = wrapper.dataset.pageId;
-    if (pageId !== highlightPageId) return; // Clamp to page where drag started
-
     const page = getState().pages.find((p) => p.id === pageId);
     if (!page) return;
 
@@ -968,8 +1224,86 @@ export function mountAnnotateView(root, opts = {}) {
     if (!canvasData) return;
 
     const canvasRect = canvasData.canvas.getBoundingClientRect();
+
+    // Compute the current page point once, in this function's scope, so every
+    // branch (highlight preview, image move/resize, select drag) can use it.
+    // Previously `pagePoint` was declared with `const` inside nested blocks,
+    // so `dragAnnotationStart = pagePoint;` in the highlight branch threw
+    // "ReferenceError: pagePoint is not defined".
     const pagePoint = screenToPageForBlock(e.clientX, e.clientY, canvasData.block, canvasRect);
     if (!pagePoint) return;
+
+    if (isResizingImage && selectedAnnotationId && selectedPageId === pageId) {
+      const dx = pagePoint.x - imageDragStart.x;
+      const dy = pagePoint.y - imageDragStart.y;
+      const ann = getPageAnnotations(getState().annotations || {}, selectedPageId).find((a) => a.id === selectedAnnotationId);
+      if (!ann || ann.type !== "image") return;
+      let newW = imageResizeStart.width;
+      let newH = imageResizeStart.height;
+      let newX = imageResizeStart.x;
+      let newY = imageResizeStart.y;
+      const corner = imageResizeCorner;
+      // Compute desired deltas per corner
+      let dw = 0, dh = 0;
+      if (corner === "se") { dw = dx; dh = dy; }
+      else if (corner === "ne") { dw = dx; dh = -dy; newY = imageResizeStart.y - dy; }
+      else if (corner === "sw") { dw = -dx; dh = dy; newX = imageResizeStart.x - dx; }
+      else if (corner === "nw") { dw = -dx; dh = -dy; newX = imageResizeStart.x - dx; newY = imageResizeStart.y - dy; }
+      // Aspect ratio: if shift is not held, free resize; if held, lock aspect.
+      // Always lock aspect for simplicity (keep proportions).
+      const aspect = imageResizeStart.width / imageResizeStart.height;
+      // Apply width/height changes, keeping min size
+      const candW = Math.max(10, newW + dw);
+      const candH = Math.max(10, newH + dh);
+      // Lock aspect based on which corner drives
+      let finalW, finalH;
+      if (corner === "se" || corner === "nw") {
+        // Use horizontal delta as driver
+        finalW = candW;
+        finalH = Math.max(10, finalW / aspect);
+      } else {
+        finalH = candH;
+        finalW = Math.max(10, finalH * aspect);
+      }
+      // Recompute position for top-left anchors
+      if (corner === "nw" || corner === "sw" || corner === "ne") {
+        // top or left changed: adjust position so opposite corner stays
+        if (corner === "nw") { newX = imageResizeStart.x + (imageResizeStart.width - finalW); newY = imageResizeStart.y + (imageResizeStart.height - finalH); }
+        else if (corner === "ne") { newY = imageResizeStart.y + (imageResizeStart.height - finalH); }
+        else if (corner === "sw") { newX = imageResizeStart.x + (imageResizeStart.width - finalW); }
+      }
+      updateAnnotations((anns) =>
+        updateAnnotation(anns, selectedPageId, selectedAnnotationId, { x: newX, y: newY, width: finalW, height: finalH })
+      );
+      renderOverlayForPage(pageId);
+      return;
+    }
+
+    if (isDraggingImage && selectedAnnotationId && selectedPageId === pageId) {
+      const dx = pagePoint.x - imageDragStart.x;
+      const dy = pagePoint.y - imageDragStart.y;
+      imageDragOffset = { x: dx, y: dy };
+      renderOverlayForPage(pageId);
+      return;
+    }
+
+    if (isDragging && selectedAnnotationId && selectedPageId === pageId) {
+      // Drag the selected non-image annotation by the page-space delta from
+      // where the drag started.
+      const ann = getPageAnnotations(getState().annotations || {}, selectedPageId).find((a) => a.id === selectedAnnotationId);
+      if (!ann) return;
+      updateAnnotations((anns) =>
+        updateAnnotation(anns, selectedPageId, selectedAnnotationId, {
+          x: dragAnnotationStart.x + (pagePoint.x - dragStartPage.x),
+          y: dragAnnotationStart.y + (pagePoint.y - dragStartPage.y),
+        })
+      );
+      renderOverlayForPage(pageId);
+      return;
+    }
+
+    if (!isDrawingHighlight) return;
+    if (pageId !== highlightPageId) return; // Clamp to page where drag started
 
     dragAnnotationStart = pagePoint;
     renderHighlightPreview(pageId, page, getEffectiveRotation(page), canvasData.canvas.width, canvasData.canvas.height, canvasData.wrapper.querySelector(".annotate-overlay"));
@@ -980,6 +1314,36 @@ export function mountAnnotateView(root, opts = {}) {
     if (pendingTextInput) {
       createTextInputAt(pendingTextInput.pageX, pendingTextInput.pageY, pendingTextInput.pageId);
       pendingTextInput = null;
+    }
+
+    // Commit image drag once on pointerup (clamped to page, 20pt margin)
+    if (isDraggingImage && selectedAnnotationId && selectedPageId) {
+      isDraggingImage = false;
+      const state = getState();
+      const page = state.pages.find((p) => p.id === selectedPageId);
+      const ann = getPageAnnotations(state.annotations || {}, selectedPageId).find((a) => a.id === selectedAnnotationId);
+      if (page && ann && ann.type === "image") {
+        let newX = imageDragStartPos.x + imageDragOffset.x;
+        let newY = imageDragStartPos.y + imageDragOffset.y;
+        const clamp = 20;
+        newX = Math.max(clamp, Math.min(newX, page.width - clamp - ann.width));
+        newY = Math.max(clamp, Math.min(newY, page.height - clamp - ann.height));
+        updateAnnotations((anns) =>
+          updateAnnotation(anns, selectedPageId, selectedAnnotationId, { x: newX, y: newY })
+        );
+      }
+      imageDragOffset = { x: 0, y: 0 };
+      renderAllOverlays();
+    }
+
+    if (isResizingImage) {
+      isResizingImage = false;
+      imageResizeCorner = null;
+      renderAllOverlays();
+    }
+
+    if (isDragging) {
+      isDragging = false;
     }
 
     if (isDrawingHighlight) {
@@ -1033,6 +1397,7 @@ export function mountAnnotateView(root, opts = {}) {
       if (e.key === "v" || e.key === "V") setTool("select");
       else if (e.key === "t" || e.key === "T") setTool("text");
       else if (e.key === "h" || e.key === "H") setTool("highlight");
+      else if (e.key === "i" || e.key === "I") setTool("image");
     }
 
     // Arrow keys for nudging selected annotation
@@ -1047,27 +1412,6 @@ export function mountAnnotateView(root, opts = {}) {
         else if (e.key === "ArrowRight") dx = step;
         nudgeAnnotation(dx, dy);
       }
-    }
-
-    // Page jump input
-    if (e.target === pageJump) {
-      if (e.key === "Enter") {
-        const pageNum = parseInt(pageJump.value, 10);
-        if (!isNaN(pageNum) && pageNum >= 1 && pageNum <= getState().pages.length) {
-          jumpToPage(pageNum - 1);
-        }
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        const pageNum = Math.min(parseInt(pageJump.value, 10) + 1 || 1, getState().pages.length);
-        pageJump.value = pageNum;
-        jumpToPage(pageNum - 1);
-      } else if (e.key === "ArrowDown") {
-        e.preventDefault();
-        const pageNum = Math.max(parseInt(pageJump.value, 10) - 1 || 1, 1);
-        pageJump.value = pageNum;
-        jumpToPage(pageNum - 1);
-      }
-      return;
     }
 
     // Page navigation with PageUp/PageDown
@@ -1138,7 +1482,6 @@ export function mountAnnotateView(root, opts = {}) {
     const current = findCurrentPage(layout.blocks, pagesWrap.scrollTop, pagesWrap.clientHeight);
     if (current) {
       pageIndicator.textContent = `Page ${current.index + 1} of ${state.pages.length}`;
-      pageJump.value = current.index + 1;
       if (current.pageId !== currentPageId) {
         currentPageId = current.pageId;
         publishAnnotateState();
@@ -1256,6 +1599,7 @@ export function mountAnnotateView(root, opts = {}) {
       intersectionObserver.disconnect();
       setupIntersectionObserver();
     }
+    positionPalette();
   }
 
   async function enter(startPageIndex = 0) {
@@ -1267,12 +1611,25 @@ export function mountAnnotateView(root, opts = {}) {
     resizeHandler = () => {
       if (!view.hidden) {
         zoomFitWidth();
+        positionPalette();
       }
     };
     window.addEventListener("resize", resizeHandler);
 
     // First: fit-width zoom -> computes zoom and rebuilds layout
     zoomFitWidth();
+    positionPalette();
+
+    // Re-align after the next paint (palette size may not be settled yet) and
+    // once more after that; also keep watching the page area for size changes
+    // so the Text button stays centered on the Annotate rail item.
+    const alignPalette = () => { if (!view.hidden) positionPalette(); };
+    requestAnimationFrame(() => {
+      alignPalette();
+      requestAnimationFrame(alignPalette);
+    });
+    paletteResizeObserver = new ResizeObserver(alignPalette);
+    paletteResizeObserver.observe(pagesWrap);
 
     // Now layout is at the correct zoom; build structure if needed (zoomFitWidth calls updateZoom -> buildPageStructure)
     // Set up intersection observer
@@ -1331,6 +1688,11 @@ export function mountAnnotateView(root, opts = {}) {
       window.removeEventListener("resize", resizeHandler);
       resizeHandler = null;
     }
+    if (paletteResizeObserver) {
+      paletteResizeObserver.disconnect();
+      paletteResizeObserver = null;
+    }
+    if (palette) palette.hidden = true;
     if (intersectionObserver) {
       intersectionObserver.disconnect();
       intersectionObserver = null;
@@ -1361,7 +1723,7 @@ export function mountAnnotateView(root, opts = {}) {
   }
 
   // Event listeners
-  toolButtons.forEach((btn) => {
+  paletteButtons.forEach((btn) => {
     btn.addEventListener("click", () => setTool(btn.dataset.tool));
   });
 
@@ -1379,13 +1741,6 @@ export function mountAnnotateView(root, opts = {}) {
   }
 
   doneBtn.addEventListener("click", done);
-
-  pageJump.addEventListener("change", () => {
-    const pageNum = parseInt(pageJump.value, 10);
-    if (!isNaN(pageNum) && pageNum >= 1 && pageNum <= getState().pages.length) {
-      jumpToPage(pageNum - 1);
-    }
-  });
 
   pagesWrap.addEventListener("pointerdown", onPointerDown);
   window.addEventListener("pointermove", onPointerMove);

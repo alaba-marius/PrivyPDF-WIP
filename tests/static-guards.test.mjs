@@ -574,9 +574,9 @@ test("static guard: annotate-view.js bare function calls", () => {
     "HIGHLIGHT_PRESET_COLORS", "ANNOTATE_VIEW_HTML",
     // CSS functions that appear in template literals
     "translateX", "translateY", "translate", "rotate", "scale", "skewX", "skewY",
-    "rgba", "rgb", "hsl", "hsla",
+    "rgba", "rgb", "hsl", "hsla", "url",
     // HTML/template content that looks like calls
-    "Select", "Highlight", "Text",
+    "Select", "Highlight", "Text", "image",
   ]);
 
   // Parameters from opts that are used as functions

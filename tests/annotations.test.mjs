@@ -17,10 +17,12 @@ import {
   validateTextForHelvetica,
   createTextAnnotation,
   createHighlightAnnotation,
+  createImageAnnotation,
   DEFAULT_TEXT_FONT_SIZE,
   DEFAULT_TEXT_COLOR,
   DEFAULT_HIGHLIGHT_COLOR,
   DEFAULT_HIGHLIGHT_OPACITY,
+  DEFAULT_IMAGE_OPACITY,
   toJSON,
   fromJSON,
   clear,
@@ -509,4 +511,88 @@ test("panelControlValues: undefined selection returns store defaults", () => {
   const values = panelControlValues(state, undefined);
   assert.equal(values.fontSize, 9);
   assert.equal(values.textColor, "#111111");
+});
+
+// --- Image annotation tests ---
+
+test("DEFAULT_IMAGE_OPACITY is 1", () => {
+  assert.equal(DEFAULT_IMAGE_OPACITY, 1);
+});
+
+test("createImageAnnotation with defaults", () => {
+  const ann = createImageAnnotation(50, 60, 200, 150, { assetId: "img1" });
+  assert.equal(ann.type, "image");
+  assert.equal(ann.x, 50);
+  assert.equal(ann.y, 60);
+  assert.equal(ann.width, 200);
+  assert.equal(ann.height, 150);
+  assert.equal(ann.assetId, "img1");
+  assert.equal(ann.opacity, DEFAULT_IMAGE_OPACITY);
+});
+
+test("createImageAnnotation: opacity option overrides default", () => {
+  const ann = createImageAnnotation(0, 0, 100, 100, { assetId: "img2", opacity: 0.5 });
+  assert.equal(ann.opacity, 0.5);
+});
+
+test("createImageAnnotation: assetId defaults to null", () => {
+  const ann = createImageAnnotation(0, 0, 100, 100);
+  assert.equal(ann.assetId, null);
+});
+
+test("panelControlValues: selected image annotation uses its own opacity", () => {
+  const state = {
+    annotateFontSize: 12,
+    annotateTextColor: "#000000",
+    annotateHighlightColor: "#ffe14d",
+    annotateHighlightOpacity: 0.4,
+    annotateImageOpacity: 0.7,
+  };
+  const selected = { id: "i1", type: "image", opacity: 0.3, assetId: "img1" };
+  const values = panelControlValues(state, selected);
+  assert.equal(values.opacity, 0.3);
+  assert.equal(values.fontSize, 12);
+});
+
+test("panelControlValues: selected image falls back to store image opacity", () => {
+  const state = {
+    annotateFontSize: 12,
+    annotateTextColor: "#000000",
+    annotateHighlightColor: "#ffe14d",
+    annotateHighlightOpacity: 0.4,
+    annotateImageOpacity: 0.6,
+  };
+  const selected = { id: "i1", type: "image", assetId: "img1" };
+  const values = panelControlValues(state, selected);
+  assert.equal(values.opacity, 0.6);
+});
+
+test("panelControlValues: selected image with no opacity and no store opacity falls back to DEFAULT_IMAGE_OPACITY", () => {
+  const state = {
+    annotateFontSize: 12,
+    annotateTextColor: "#000000",
+    annotateHighlightColor: "#ffe14d",
+    annotateHighlightOpacity: 0.4,
+  };
+  const selected = { id: "i1", type: "image", assetId: "img1" };
+  const values = panelControlValues(state, selected);
+  assert.equal(values.opacity, DEFAULT_IMAGE_OPACITY);
+});
+
+test("annotations: add/move/delete image annotation round trip", () => {
+  let annotations = {};
+  const ann = createImageAnnotation(100, 100, 200, 100, { assetId: "img1" });
+  annotations = addAnnotation(annotations, "p1", ann);
+  const anns = getPageAnnotations(annotations, "p1");
+  assert.equal(anns.length, 1);
+  assert.equal(anns[0].type, "image");
+  assert.equal(anns[0].assetId, "img1");
+
+  annotations = moveAnnotation(annotations, "p1", anns[0].id, 10, -5);
+  const moved = getPageAnnotations(annotations, "p1")[0];
+  assert.equal(moved.x, 110);
+  assert.equal(moved.y, 95);
+
+  annotations = deleteAnnotation(annotations, "p1", anns[0].id);
+  assert.equal(getPageAnnotations(annotations, "p1").length, 0);
 });

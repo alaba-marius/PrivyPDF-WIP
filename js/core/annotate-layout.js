@@ -7,6 +7,49 @@ import { visualDims, visualToPage, pageToVisual } from "./overlay.js";
 export { visualDims, visualToPage, pageToVisual };
 
 /**
+ * Convert a page-space rectangle to its screen bounding box.
+ * Converts all 4 corners of the page-space rect to screen coordinates and
+ * returns the bounding box, so width/height are always positive (even at
+ * rotations 180/270 where pageToScreenForBlock flips the Y axis and a
+ * naive top-left/bottom-right delta collapses to a negative size).
+ * @param {number} pageX - Page-space X (bottom-left origin, y up)
+ * @param {number} pageY - Page-space Y
+ * @param {number} width - Page-space width
+ * @param {number} height - Page-space height
+ * @param {Object} block - The page block from computePageLayout
+ * @param {Object} canvasRect - The canvas getBoundingClientRect()
+ * @returns {{ left, top, right, bottom, width, height }|null} Screen bounding box, or null
+ */
+export function pageRectToScreen(pageX, pageY, width, height, block, canvasRect) {
+  const corners = [
+    { x: pageX, y: pageY },
+    { x: pageX + width, y: pageY },
+    { x: pageX + width, y: pageY + height },
+    { x: pageX, y: pageY + height },
+  ];
+  const screens = corners.map((c) =>
+    pageToScreenForBlock(c.x, c.y, block, canvasRect)
+  ).filter(Boolean);
+  if (screens.length < 4) return null;
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const s of screens) {
+    minX = Math.min(minX, s.clientX);
+    minY = Math.min(minY, s.clientY);
+    maxX = Math.max(maxX, s.clientX);
+    maxY = Math.max(maxY, s.clientY);
+  }
+  return {
+    left: minX,
+    top: minY,
+    right: maxX,
+    bottom: maxY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
+}
+
+/**
  * Compute layout for all pages at a given zoom.
  * Returns block offsets (top positions) and total height.
  * @param {Array} pages - Array of page objects with { id, width, height, baseRotation, rotated }

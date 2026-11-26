@@ -105,6 +105,7 @@
   --radius-inputs: 14px;
   --radius-buttons: 14px;
   --radius-iconcontrols: 40px;
+  --radius-controls: 8px;
 
   /* Shadows */
   --shadow-lg: rgba(22, 22, 24, 0.02) 0px 7px 20px -8px, rgba(22, 22, 24, 0.02) 0px 29px 33px -4px, rgba(22, 22, 24, 0.05) 0px 22px 30px -8px, rgba(22, 22, 24, 0.06) 0px 0px 0px 1px;

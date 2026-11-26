@@ -518,6 +518,7 @@ async function exportDocument(mode) {
     });
     await downloadBytes(name, bytes);
   } catch (error) {
+    console.error("Export failed:", error);
     toast(`Export failed: ${error.message}`, { type: "error" });
   }
 }
@@ -596,6 +597,7 @@ async function extractSelected() {
     });
     await downloadBytes(name, bytes);
   } catch (error) {
+    console.error("Export failed:", error);
     toast(`Export failed: ${error.message}`, { type: "error" });
   }
 }
@@ -621,6 +623,7 @@ async function previewFirstPage() {
     });
     await showPreview(bytes);
   } catch (error) {
+    console.error("Preview failed:", error);
     toast(`Preview failed: ${error.message}`, { type: "error" });
   }
 }

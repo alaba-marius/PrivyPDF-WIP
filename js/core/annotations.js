@@ -15,11 +15,13 @@ function resetAnnotationIdCounter() {
 // Annotation structure:
 // Text: { id, type: "text", x, y, text, fontSize, color }
 // Highlight: { id, type: "highlight", x, y, width, height, color, opacity }
+// Image: { id, type: "image", x, y, width, height, assetId, opacity }
 
 export const DEFAULT_TEXT_FONT_SIZE = 14;
 export const DEFAULT_TEXT_COLOR = "#000000";
 export const DEFAULT_HIGHLIGHT_COLOR = "#ffe14d";
 export const DEFAULT_HIGHLIGHT_OPACITY = 0.4;
+export const DEFAULT_IMAGE_OPACITY = 1;
 
 // Pure helper functions that take annotations object and return new one
 // All functions are pure - they don't mutate the input, they return new objects
@@ -153,6 +155,19 @@ export function createHighlightAnnotation(x, y, width, height, options = {}) {
   };
 }
 
+// Create an image annotation with defaults
+export function createImageAnnotation(x, y, width, height, options = {}) {
+  return {
+    type: "image",
+    x,
+    y,
+    width,
+    height,
+    assetId: options.assetId || null,
+    opacity: options.opacity ?? DEFAULT_IMAGE_OPACITY,
+  };
+}
+
 // Get annotation defaults from store state (pure function)
 // Returns options for "highlight" or "text" type
 export function annotationDefaultsFromState(state, type) {
@@ -184,9 +199,11 @@ export function panelControlValues(state, selectedAnnotation) {
   const highlightColor = selectedAnnotation?.type === "highlight"
     ? selectedAnnotation.color ?? state.annotateHighlightColor ?? DEFAULT_HIGHLIGHT_COLOR
     : state.annotateHighlightColor ?? DEFAULT_HIGHLIGHT_COLOR;
-  const opacity = selectedAnnotation?.type === "highlight"
-    ? selectedAnnotation.opacity ?? state.annotateHighlightOpacity ?? DEFAULT_HIGHLIGHT_OPACITY
-    : state.annotateHighlightOpacity ?? DEFAULT_HIGHLIGHT_OPACITY;
+  const opacity = selectedAnnotation?.type === "image"
+    ? selectedAnnotation.opacity ?? state.annotateImageOpacity ?? DEFAULT_IMAGE_OPACITY
+    : selectedAnnotation?.type === "highlight"
+      ? selectedAnnotation.opacity ?? state.annotateHighlightOpacity ?? DEFAULT_HIGHLIGHT_OPACITY
+      : state.annotateHighlightOpacity ?? DEFAULT_HIGHLIGHT_OPACITY;
   return { fontSize, textColor, highlightColor, opacity };
 }
 

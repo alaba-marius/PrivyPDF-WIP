@@ -545,6 +545,26 @@ html { overflow: hidden; }
   flex: 0 0 auto;
 }
 
+/* Annotate top bar: one row — title + page indicator on the left, Done pushed
+   right by its existing margin-left: auto; undo/redo/zoom sit between. */
+.annotate-top-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-8);
+  padding: var(--spacing-12) var(--spacing-20);
+  border-bottom: 1px solid var(--color-border-soft);
+  background: #fff;
+  flex: 0 0 auto;
+}
+
+.annotate-title {
+  font-weight: 600;
+  font-size: var(--text-nav);
+  line-height: var(--leading-nav);
+  color: var(--color-graphite);
+  margin-right: var(--spacing-4);
+}
+
 .annotate-tool-group {
   display: flex;
   align-items: center;
@@ -630,6 +650,62 @@ html { overflow: hidden; }
 .annotate-done {
   margin-left: auto;
   flex-shrink: 0;
+}
+
+/* Floating tool palette: positioned at the left edge of the page area next to
+   the rail's Annotate item. Becomes a horizontal bar under 900px. */
+.annotate-tool-palette {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-8);
+  padding: 6px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--spacing-12);
+  background: #fff;
+  box-shadow: var(--shadow-lg);
+  z-index: 50;
+  pointer-events: auto;
+}
+
+.annotate-palette-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--color-border-input);
+  border-radius: var(--radius-controls);
+  background: #fff;
+  cursor: pointer;
+  outline: none;
+}
+
+.annotate-palette-btn .ds-icon {
+  width: 20px;
+  height: 20px;
+  color: var(--color-soft-charcoal);
+}
+
+.annotate-palette-btn:hover {
+  border-color: var(--color-graphite);
+  background: var(--color-surface-subtle);
+}
+
+.annotate-palette-btn:focus-visible {
+  outline: 2px solid var(--color-graphite);
+  outline-offset: 2px;
+}
+
+.annotate-palette-btn[aria-pressed="true"],
+.annotate-palette-btn--active {
+  border-color: var(--color-electric-capture-blue);
+  background: var(--color-electric-capture-blue);
+}
+
+.annotate-palette-btn[aria-pressed="true"] .ds-icon,
+.annotate-palette-btn--active .ds-icon {
+  color: #fff;
 }
 
 /* Pages area */
@@ -731,6 +807,41 @@ html { overflow: hidden; }
   position: absolute;
   pointer-events: none;
   border-radius: 2px;
+}
+
+/* Image annotation element */
+.annotate-image-annotation {
+  position: absolute;
+  pointer-events: auto;
+  border: 2px solid transparent;
+  border-radius: 2px;
+  cursor: default;
+  outline: none;
+  overflow: hidden;
+  background: #fff;
+}
+
+.annotate-image-annotation.selected {
+  border-color: var(--color-electric-capture-blue);
+  outline: none;
+}
+
+.annotate-image-annotation:focus-visible {
+  outline: 2px solid var(--color-electric-capture-blue);
+  outline-offset: 2px;
+}
+
+/* Image annotation resize corner handles */
+.annotate-image-handle {
+  position: absolute;
+  pointer-events: auto;
+  cursor: pointer;
+  z-index: 60;
+}
+
+.annotate-image-handle > div {
+  background: #0d44e8;
+  border: 1px solid #fff;
 }
 
 /* Text input textarea: matches annotation text size, transparent background, visible outline */
@@ -930,6 +1041,14 @@ html { overflow: hidden; }
     margin-top: var(--spacing-8);
     padding-top: var(--spacing-8);
     border-top: 1px solid var(--color-border-soft);
+  }
+
+  .annotate-tool-palette {
+    flex-direction: row;
+    gap: var(--spacing-8);
+    width: auto;
+    max-width: calc(100% - 16px);
+    border-radius: var(--radius-controls);
   }
 }
 

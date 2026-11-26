@@ -2,6 +2,7 @@
 // (tests pass a fake); otherwise it is dynamically imported from the vendored
 // bundle the first time someone exports.
 import { formatPageNumber, placeLabel, validateWatermark, watermarkPlacement, watermarkAutoSize, DEFAULT_MARGIN } from "./overlay.js";
+import { getAsset } from "./image-assets.js";
 
 const PDFLIB_URL = "/vendor/pdf-lib/pdf-lib.esm.min.js";
 
@@ -50,7 +51,7 @@ export function createExporter({ PDFLib } = {}) {
   }
 
   // Draw text annotations on a page
-  async function drawAnnotations(outPage, annotations, pageW, pageH, effectiveRotation, rgb, fontCache, degrees) {
+  async function drawAnnotations(outPage, annotations, pageW, pageH, effectiveRotation, rgb, fontCache, degrees, assetCache) {
     if (!annotations || !annotations.length) return;
 
     // Load Helvetica font for annotations (shared with page numbers)
@@ -121,6 +122,64 @@ export function createExporter({ PDFLib } = {}) {
           color: highlightColor,
           opacity,
         });
+      } else if (ann.type === "image") {
+        // Image annotation: stored in page space (x, y, width, height).
+        // pdf-lib drawImage rotates COUNTERCLOCKWISE about its draw origin
+        // (bottom-left corner). The page's /Rotate (effectiveRotation) rotates
+        // all page content CLOCKWISE when displayed. To make the image appear
+        // upright and fill the stored page-space rectangle, draw it rotated CCW
+        // by effectiveRotation with origin/size per derivation:
+        //   r=0:   origin (x, y),      size (w, h), rotate 0
+        //   r=90:  origin (x+w, y),    size (h, w), rotate 90
+        //   r=180: origin (x+w, y+h),  size (w, h), rotate 180
+        //   r=270: origin (x, y+h),    size (h, w), rotate 270
+        const asset = getAsset(ann.assetId);
+        if (!asset) continue;
+
+        const x = ann.x || 0;
+        const y = ann.y || 0;
+        const width = ann.width || 0;
+        const height = ann.height || 0;
+        if (width <= 0 || height <= 0) continue;
+
+        const opacity = Math.max(0, Math.min(1, ann.opacity ?? 1));
+
+        const r = effectiveRotation % 360;
+        let drawX = x;
+        let drawY = y;
+        let drawW = width;
+        let drawH = height;
+        if (r === 90) {
+          drawX = x + width;
+          drawW = height;
+          drawH = width;
+        } else if (r === 180) {
+          drawX = x + width;
+          drawY = y + height;
+        } else if (r === 270) {
+          drawY = y + height;
+          drawW = height;
+          drawH = width;
+        }
+
+        // Per-document asset cache: embed each asset once per exportPages call
+        // (a fresh cache per call, so split parts each embed their own assets).
+        let embed = assetCache.get(ann.assetId);
+        if (!embed) {
+          embed = asset.mimeType === "image/jpeg"
+            ? await outPage.doc.embedJpg(asset.bytes)
+            : await outPage.doc.embedPng(asset.bytes);
+          assetCache.set(ann.assetId, embed);
+        }
+
+        outPage.drawImage(embed, {
+          x: drawX,
+          y: drawY,
+          width: drawW,
+          height: drawH,
+          rotate: degrees(r),
+          opacity,
+        });
       }
     }
   }
@@ -154,6 +213,7 @@ export function createExporter({ PDFLib } = {}) {
     const fontCache = { StandardFonts, Helvetica: null };
 
     const sourceDocs = new Map(); // source id -> opened pdf-lib document
+    const assetCache = new Map(); // assetId -> embedded image (per exportPages call)
     let processed = 0;
 
     for (let i = 0; i < targets.length; i++) {
@@ -251,7 +311,7 @@ export function createExporter({ PDFLib } = {}) {
 
       // --- Annotations ------------------------------------------------------
       const pageAnnotations = annotations[page.id] || [];
-      await drawAnnotations(outPage, pageAnnotations, pageW, pageH, effectiveRotation, rgb, fontCache, degrees);
+      await drawAnnotations(outPage, pageAnnotations, pageW, pageH, effectiveRotation, rgb, fontCache, degrees, assetCache);
 
       processed++;
       // Yield to the main thread every few pages so long exports stay

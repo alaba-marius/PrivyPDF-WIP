@@ -11,6 +11,8 @@ import {
   getPageAnnotations,
   createTextAnnotation,
   createHighlightAnnotation,
+  createImageAnnotation,
+  addAnnotation,
   updateAnnotation,
   deleteAnnotation,
   DEFAULT_TEXT_FONT_SIZE,
@@ -19,6 +21,7 @@ import {
   DEFAULT_HIGHLIGHT_OPACITY,
   panelControlValues,
 } from "../core/annotations.js";
+import { getAsset, registerAsset } from "../core/image-assets.js";
 
 export function mountPanel(root, opts = {}) {
   const {
@@ -87,6 +90,15 @@ export function mountPanel(root, opts = {}) {
   const annotateAnnotationList = root.querySelector("#annotate-annotation-list");
   const annotateHighlightColorSwatches = () => root.querySelectorAll("#annotate-highlight-options .ds-color-swatch");
   const annotateTextColorSwatches = () => root.querySelectorAll("#annotate-text-options .ds-color-swatch");
+
+  // Image annotation options
+  const annotateImageOptions = root.querySelector("#annotate-image-options");
+  const annotateImageHint = root.querySelector("#annotate-image-hint");
+  const annotateImageOpacity = root.querySelector("#annotate-image-opacity");
+  const annotateImageKeepProportions = root.querySelector("#annotate-image-keep-proportions");
+  const annotateImageChoose = root.querySelector("#annotate-image-choose");
+  const annotateImageReplace = root.querySelector("#annotate-image-replace");
+  const annotateImageDelete = root.querySelector("#annotate-image-delete");
 
   const watermarkColorSwatches = () => root.querySelectorAll('[name="watermark-color"]');
 
@@ -162,6 +174,86 @@ export function mountPanel(root, opts = {}) {
 
   if (annotateDeleteBtn) {
     annotateDeleteBtn.addEventListener("click", () => {
+      const state = getState?.();
+      if (state && state.annotateSelectedAnnotationId && state.annotateSelectedPageId) {
+        updateAnnotations((anns) => deleteAnnotation(anns, state.annotateSelectedPageId, state.annotateSelectedAnnotationId));
+      }
+    });
+  }
+
+  // Open a file picker limited to images and return the selected File (or null).
+  function pickImageFile() {
+    return new Promise((resolve) => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp";
+      input.style.display = "none";
+      document.body.appendChild(input);
+      input.onchange = () => resolve(input.files?.[0] ?? null);
+      input.oncancel = () => resolve(null);
+      input.click();
+      document.body.removeChild(input);
+    });
+  }
+
+  if (annotateImageOpacity) {
+    annotateImageOpacity.addEventListener("input", () => {
+      const opacity = Number(annotateImageOpacity.value) / 100;
+      store?.patch({ annotateImageOpacity: opacity });
+      const state = getState?.();
+      if (state && state.annotateSelectedAnnotationId && state.annotateSelectedPageId) {
+        updateAnnotations((anns) =>
+          updateAnnotation(anns, state.annotateSelectedPageId, state.annotateSelectedAnnotationId, { opacity })
+        );
+      }
+    });
+  }
+
+  if (annotateImageKeepProportions) {
+    annotateImageKeepProportions.addEventListener("change", () => {
+      store?.patch({ annotateImageKeepProportions: annotateImageKeepProportions.checked });
+    });
+  }
+
+  if (annotateImageChoose) {
+    annotateImageChoose.addEventListener("click", async () => {
+      const state = getState?.();
+      if (!state) return;
+      const pageId = state.annotateCurrentPageId;
+      if (!pageId) return;
+      const file = await pickImageFile();
+      if (!file) return;
+      try {
+        const { assetId, width, height } = await registerAsset(file);
+        const maxW = 300;
+        const scale = Math.min(1, maxW / width);
+        const ann = createImageAnnotation(100, 100, width * scale, height * scale, { assetId });
+        updateAnnotations((anns) => addAnnotation(anns, pageId, ann));
+      } catch (err) {
+        console.warn("Failed to insert image:", err);
+      }
+    });
+  }
+
+  if (annotateImageReplace) {
+    annotateImageReplace.addEventListener("click", async () => {
+      const state = getState?.();
+      if (!state || !state.annotateSelectedAnnotationId || !state.annotateSelectedPageId) return;
+      const file = await pickImageFile();
+      if (!file) return;
+      try {
+        const { assetId } = await registerAsset(file);
+        updateAnnotations((anns) =>
+          updateAnnotation(anns, state.annotateSelectedPageId, state.annotateSelectedAnnotationId, { assetId })
+        );
+      } catch (err) {
+        console.warn("Failed to replace image:", err);
+      }
+    });
+  }
+
+  if (annotateImageDelete) {
+    annotateImageDelete.addEventListener("click", () => {
       const state = getState?.();
       if (state && state.annotateSelectedAnnotationId && state.annotateSelectedPageId) {
         updateAnnotations((anns) => deleteAnnotation(anns, state.annotateSelectedPageId, state.annotateSelectedAnnotationId));
@@ -562,7 +654,9 @@ export function mountPanel(root, opts = {}) {
             ? `${getAnnotationCount(state.annotations || {}, currentPageId)} annotation(s) — click to select, drag to move, Del to delete`
             : currentTool === "text"
               ? "Click on the page to add a text box. Type, then press Enter or click away to commit. Esc to cancel."
-              : "Drag on the page to create a highlight. Click away or press Esc to cancel.";
+              : currentTool === "highlight"
+                ? "Drag on the page to create a highlight. Click away or press Esc to cancel."
+                : "Choose an image to insert on this page.";
 
           // Find the selected annotation object (if any) so the panel shows its
           // own values rather than the store defaults for new annotations.
@@ -577,8 +671,14 @@ export function mountPanel(root, opts = {}) {
           // when the tool is "select", and vice versa).
           const showHighlight = currentTool === "highlight" || selectedAnnotation?.type === "highlight";
           const showText = currentTool === "text" || selectedAnnotation?.type === "text";
+          const showImage = currentTool === "image" || selectedAnnotation?.type === "image";
           if (annotateHighlightOptions) annotateHighlightOptions.hidden = !showHighlight;
           if (annotateTextOptions) annotateTextOptions.hidden = !showText;
+          if (annotateImageOptions) annotateImageOptions.hidden = !showImage;
+          // The shared opacity slider drives the selected annotation's opacity
+          // (highlight or image); hide it while image options are shown so only
+          // the image-specific slider is visible.
+          if (annotateOpacity) annotateOpacity.hidden = showImage;
 
           // Controls reflect the selected annotation's values, falling back to
           // the store defaults (panelControlValues is pure, in annotations.js).
@@ -618,6 +718,17 @@ export function mountPanel(root, opts = {}) {
             annotateOpacity.value = String(Math.round(values.opacity * 100));
           }
 
+          // Update image-specific controls when an image is selected
+          if (annotateImageOpacity) {
+            annotateImageOpacity.value = String(Math.round(values.opacity * 100));
+          }
+          if (annotateImageKeepProportions) {
+            annotateImageKeepProportions.checked = state.annotateImageKeepProportions !== false;
+          }
+          const isImageSelected = selectedAnnotation?.type === "image";
+          if (annotateImageReplace) annotateImageReplace.hidden = !isImageSelected;
+          if (annotateImageDelete) annotateImageDelete.hidden = !isImageSelected;
+
           // Show/hide delete button
           if (annotateDeleteBtn) {
             annotateDeleteBtn.hidden = !selectedAnnotationId;
@@ -641,7 +752,7 @@ export function mountPanel(root, opts = {}) {
 
                 const icon = document.createElement("i");
                 icon.className = "annotate-annotation-icon";
-                icon.setAttribute("data-icon", ann.type === "text" ? "type" : "highlighter");
+                icon.setAttribute("data-icon", ann.type === "text" ? "type" : ann.type === "image" ? "image" : "highlighter");
                 icon.setAttribute("aria-hidden", "true");
                 item.appendChild(icon);
 
@@ -649,6 +760,8 @@ export function mountPanel(root, opts = {}) {
                 label.className = "annotate-annotation-label";
                 if (ann.type === "text") {
                   label.textContent = (ann.text || "Empty text").slice(0, 50);
+                } else if (ann.type === "image") {
+                  label.textContent = `Image ${Math.round(ann.width || 0)}×${Math.round(ann.height || 0)} pt`;
                 } else {
                   label.textContent = `Highlight ${Math.round(ann.width)}×${Math.round(ann.height)} pt`;
                 }

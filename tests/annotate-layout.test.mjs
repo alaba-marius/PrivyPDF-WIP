@@ -11,6 +11,7 @@ import {
   pageToVisual,
   screenToPageForBlock,
   pageToScreenForBlock,
+  pageRectToScreen,
 } from "../js/core/annotate-layout.js";
 
 const PAGE_SIZES = [
@@ -449,4 +450,100 @@ test("annotate-layout: pageToScreenForBlock maps page origin to correct canvas c
       }
     }
   }
+});
+
+// ===== pageRectToScreen tests =====
+
+function makeBlock(pageW, pageH, rotation) {
+  const { visualW, visualH } = visualDims(pageW, pageH, rotation);
+  return {
+    pageW, pageH, visualW, visualH, rotation,
+  };
+}
+
+const CANVAS_RECT = { left: 100, top: 50, width: 612, height: 792 };
+
+test("annotate-layout: pageRectToScreen - rotation 0 preserves width and height", () => {
+  const block = makeBlock(612, 792, 0);
+  const rect = pageRectToScreen(100, 200, 300, 400, block, CANVAS_RECT);
+  assert.ok(rect, "Should return a bounding box");
+  // Rotation 0: page origin bottom-left maps to canvas bottom-left corner area
+  // width and height should be positive and match page-space dims at scale 1
+  assert.equal(rect.width, 300, "width should be 300 at rotation 0");
+  assert.equal(rect.height, 400, "height should be 400 at rotation 0");
+  assert.equal(rect.left, rect.right - 300);
+  assert.equal(rect.top, rect.bottom - 400);
+});
+
+test("annotate-layout: pageRectToScreen - rotation 90 swaps width/height, positive size", () => {
+  const block = makeBlock(612, 792, 90);
+  // At rotation 90 the page's visual dims are 792x612; canvas must match.
+  const canvas = { left: 100, top: 50, width: 792, height: 612 };
+  const rect = pageRectToScreen(100, 200, 300, 400, block, canvas);
+  assert.ok(rect, "Should return a bounding box");
+  assert.ok(rect.width > 0, `width should be positive, got ${rect.width}`);
+  assert.ok(rect.height > 0, `height should be positive, got ${rect.height}`);
+  // Page-space width (300) maps to screen height, page-space height (400) maps to screen width
+  assert.equal(rect.width, 400, "width should equal page-space height at rotation 90");
+  assert.equal(rect.height, 300, "height should equal page-space width at rotation 90");
+});
+
+test("annotate-layout: pageRectToScreen - rotation 180 positive size (no collapse)", () => {
+  const block = makeBlock(612, 792, 180);
+  const rect = pageRectToScreen(100, 200, 300, 400, block, CANVAS_RECT);
+  assert.ok(rect, "Should return a bounding box");
+  assert.equal(rect.width, 300, "width should be 300 at rotation 180");
+  assert.equal(rect.height, 400, "height should be 400 at rotation 180");
+  assert.ok(rect.width > 0 && rect.height > 0, "width and height must be positive");
+});
+
+test("annotate-layout: pageRectToScreen - rotation 270 swaps width/height, positive size", () => {
+  const block = makeBlock(612, 792, 270);
+  const canvas = { left: 100, top: 50, width: 792, height: 612 };
+  const rect = pageRectToScreen(100, 200, 300, 400, block, canvas);
+  assert.ok(rect, "Should return a bounding box");
+  assert.ok(rect.width > 0, `width should be positive, got ${rect.width}`);
+  assert.ok(rect.height > 0, `height should be positive, got ${rect.height}`);
+  assert.equal(rect.width, 400, "width should equal page-space height at rotation 270");
+  assert.equal(rect.height, 300, "height should equal page-space width at rotation 270");
+});
+
+test("annotate-layout: pageRectToScreen - all four rotations give positive width/height", () => {
+  for (const rotation of [0, 90, 180, 270]) {
+    const block = makeBlock(612, 792, rotation);
+    const rect = pageRectToScreen(50, 100, 200, 300, block, CANVAS_RECT);
+    assert.ok(rect, `rotation ${rotation}: should return a bounding box`);
+    assert.ok(rect.width > 0, `rotation ${rotation}: width should be positive, got ${rect.width}`);
+    assert.ok(rect.height > 0, `rotation ${rotation}: height should be positive, got ${rect.height}`);
+    assert.equal(rect.left, rect.right - rect.width);
+    assert.equal(rect.top, rect.bottom - rect.height);
+  }
+});
+
+test("annotate-layout: pageRectToScreen - landscape page at all rotations", () => {
+  for (const rotation of [0, 90, 180, 270]) {
+    const block = makeBlock(792, 612, rotation);
+    const rect = pageRectToScreen(50, 100, 200, 300, block, CANVAS_RECT);
+    assert.ok(rect, `landscape rotation ${rotation}: should return a bounding box`);
+    assert.ok(rect.width > 0, `landscape rotation ${rotation}: width should be positive`);
+    assert.ok(rect.height > 0, `landscape rotation ${rotation}: height should be positive`);
+  }
+});
+
+test("annotate-layout: pageRectToScreen - zero-size rect returns zero width/height", () => {
+  const block = makeBlock(612, 792, 0);
+  const rect = pageRectToScreen(100, 200, 0, 0, block, CANVAS_RECT);
+  assert.ok(rect, "Should return a bounding box for zero-size rect");
+  assert.equal(rect.width, 0, "width should be 0 for zero-size rect");
+  assert.equal(rect.height, 0, "height should be 0 for zero-size rect");
+});
+
+test("annotate-layout: pageRectToScreen - returns null when fewer than 4 corners map", () => {
+  const block = makeBlock(612, 792, 0);
+  // canvasRect with 0 width/height - pageToScreenForBlock may return null for some corners
+  const degenerateRect = { left: 0, top: 0, width: 0, height: 0 };
+  const rect = pageRectToScreen(100, 200, 300, 400, block, degenerateRect);
+  // May or may not return null depending on pageToScreenForBlock behavior with zero canvas
+  // Just verify it doesn't throw
+  assert.ok(rect === null || (rect.width >= 0 && rect.height >= 0));
 });

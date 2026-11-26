@@ -3,9 +3,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createStore } from "../js/core/store.js";
-import { addAnnotation, createHighlightAnnotation } from "../js/core/annotations.js";
+import { addAnnotation, createHighlightAnnotation, createImageAnnotation, createTextAnnotation } from "../js/core/annotations.js";
 import { mountAnnotateView } from "../js/ui/annotate-view.js";
 import { mountPanel } from "../js/ui/panel.js";
+import { computeImagePlacement, registerRawBytes, resetAssetRegistry } from "../js/core/image-assets.js";
+import { screenToPageForBlock, visualDims } from "../js/core/annotate-layout.js";
 
 // ---- Minimal Fake DOM implementation ----
 
@@ -216,10 +218,13 @@ class FakeElement {
   }
 
   closest(selector) {
+    const parts = selector.split(",").map((s) => s.trim());
     let el = this;
     while (el) {
-      if (selector.startsWith(".") && el.className.split(" ").includes(selector.slice(1))) return el;
-      if (selector.startsWith("#") && el.id === selector.slice(1)) return el;
+      for (const part of parts) {
+        if (part.startsWith(".") && el.className.split(" ").includes(part.slice(1))) return el;
+        if (part.startsWith("#") && el.id === part.slice(1)) return el;
+      }
       el = el.parent;
     }
     return null;
@@ -346,9 +351,12 @@ class FakeDocument extends FakeElement {
 // Global fake DOM
 const fakeDoc = new FakeDocument();
 global.document = fakeDoc;
-global.window = {
-  addEventListener: () => {},
-  removeEventListener: () => {},
+
+// `window` is a real (fake) event target so that annotate-view.js can attach
+// the pointermove/pointerup listeners there and events fired on page elements
+// bubble up to it (mirroring a real browser).
+const fakeWin = new FakeElement("div");
+Object.assign(fakeWin, {
   requestAnimationFrame: (cb) => setTimeout(cb, 0),
   cancelAnimationFrame: (id) => clearTimeout(id),
   getComputedStyle: () => ({}),
@@ -366,11 +374,31 @@ global.window = {
   },
   HTMLElement: FakeElement,
   Element: FakeElement,
+});
+global.window = fakeWin;
+
+// Bubbling: dispatchEvent propagates up the parent chain so window-level
+// listeners (pointermove, pointerup) receive events fired on page elements.
+const _dispatchEvent = FakeElement.prototype.dispatchEvent;
+FakeElement.prototype.dispatchEvent = function(event) {
+  const handlers = this.eventListeners.get(event.type) || [];
+  for (const h of handlers) h.call(this, event);
+  if (!event.cancelBubble && this.parent) {
+    this.parent.dispatchEvent(event);
+  }
 };
+
+// Node does not provide requestAnimationFrame on the global scope (only on
+// window). annotate-view.js calls requestAnimationFrame directly, so shim it.
+global.requestAnimationFrame = (cb) => setTimeout(cb, 0);
+global.cancelAnimationFrame = (id) => clearTimeout(id);
 
 // Also expose IntersectionObserver and ResizeObserver globally
 global.IntersectionObserver = global.window.IntersectionObserver;
 global.ResizeObserver = global.window.ResizeObserver;
+
+// Window is the root of the fake document's parent chain.
+fakeDoc.parent = fakeWin;
 
 // Fake PDF.js
 const fakePdfjs = {
@@ -2022,4 +2050,411 @@ test("annotate-view: annotateCurrentPageId follows the scrolled page", async () 
   }
 
   annotateView.destroy();
+});
+
+// ===== Fake-DOM image annotation smoke test =====
+// Verifies an image annotation renders with positive height and a preserved
+// visual aspect ratio at every rotation (regresses the 180/270 height-collapse
+// bug where a naive corner delta made the image a thin line).
+
+test("annotate-view: image annotation renders with positive height and preserved aspect at every rotation", async () => {
+  const rotations = [0, 90, 180, 270];
+  const naturalWidth = 400;
+  const naturalHeight = 200; // aspect 2:1
+  const clickX = 306, clickY = 396; // page center
+  const pageW = 612, pageH = 792;
+
+  for (const rotation of rotations) {
+    resetAssetRegistry();
+    const container = fakeDoc.createElement("div");
+    container.id = `annotate-view-img-${rotation}`;
+    fakeDoc.body.appendChild(container);
+
+    const page = { id: "p1", sourceId: "s1", index: 0, baseRotation: 0, rotated: rotation, width: pageW, height: pageH };
+    const pages = [page];
+
+    registerRawBytes({ assetId: `img-${rotation}`, mimeType: "image/png", width: naturalWidth, height: naturalHeight, bytes: new Uint8Array([1, 2, 3]) });
+
+    let currentAnns = {};
+    const mockStore = {
+      get: () => ({ pages, mode: "annotate", annotations: currentAnns }),
+      patch: () => {},
+      subscribe: (fn) => { fn(mockStore.get()); return () => {}; },
+      undo: () => false, redo: () => false, canUndo: () => false, canRedo: () => false,
+    };
+    const mockGetSource = (sourceId) => Promise.resolve({ data: new Uint8Array(100), name: "Test.pdf", kind: "pdf" });
+    const mockUpdateAnnotations = (mutator) => {
+      const state = mockStore.get();
+      const newAnns = mutator(state.annotations || {});
+      currentAnns = newAnns;
+      return newAnns;
+    };
+    const onDone = () => { if (annotateView) annotateView.close(); };
+    let annotateView = null;
+
+    annotateView = mountAnnotateView(container, {
+      getState: () => mockStore.get(),
+      getSource: mockGetSource,
+      updateAnnotations: mockUpdateAnnotations,
+      subscribe: (fn) => mockStore.subscribe(fn),
+      store: mockStore,
+      onDone,
+    });
+    await annotateView.enter(0);
+    await new Promise((r) => setTimeout(r, 100)); // let pages + overlays render
+
+    // The fake canvas has no backing width/height, so give it one so the
+    // overlay's page→screen scale is a finite positive number.
+    const canvas = container.querySelector(".annotate-page-canvas");
+    assert.ok(canvas, `rot ${rotation}: page canvas exists`);
+    canvas.width = 800;
+    canvas.height = 600;
+
+    // Placement computed in visual space (centered on click, aspect preserved,
+    // clamped), then stored in page space — exactly what the image tool does.
+    const placement = computeImagePlacement(clickX, clickY, naturalWidth, naturalHeight, pageW, pageH, rotation);
+    const ann = createImageAnnotation(placement.x, placement.y, placement.width, placement.height, { assetId: `img-${rotation}` });
+    mockUpdateAnnotations((anns) => addAnnotation(anns, "p1", ann));
+    annotateView.refreshFromState(); // re-render overlays with the new annotation
+
+    const imageEl = container.querySelector(".annotate-image-annotation");
+    assert.ok(imageEl, `rot ${rotation}: image annotation element rendered`);
+    const height = parseFloat(imageEl.style.height || "0");
+    const width = parseFloat(imageEl.style.width || "0");
+    assert.ok(height > 0, `rot ${rotation}: height > 0 (got ${height})`);
+    assert.ok(Math.abs(width / height - (naturalWidth / naturalHeight)) < 0.01,
+      `rot ${rotation}: visual aspect preserved (${width}/${height} = ${(width / height).toFixed(3)})`);
+
+    annotateView.destroy();
+  }
+});
+
+// ===== MANDATORY POINTER SMOKE TESTS =====
+// Drive the REAL pointer handlers (onPointerDown on pagesWrap, onPointerMove/
+// onPointerUp on window) with pointerdown -> several pointermove -> pointerup,
+// mirroring a real browser. These regress the pagePoint ReferenceError in
+// onPointerMove and the image tool leaving the active tool on "image".
+
+let mountCounter = 0;
+
+// Mount an annotate view over `pages`, open it on page 0, and return helpers for
+// firing pointer events through the real handlers plus observing the store.
+async function mountPointerView(pages) {
+  resetAssetRegistry();
+  const container = fakeDoc.createElement("div");
+  container.id = `pointer-view-${++mountCounter}`;
+  fakeDoc.body.appendChild(container);
+
+  let state = { pages, mode: "annotate", annotations: {} };
+  let updateCallCount = 0;
+  let lastUpdatedAnns = null;
+
+  const updateAnnotations = (mutator) => {
+    const newAnns = mutator(state.annotations || {});
+    state = { ...state, annotations: newAnns };
+    updateCallCount++;
+    lastUpdatedAnns = newAnns;
+    return newAnns;
+  };
+
+  const store = {
+    get: () => state,
+    patch: (partial) => { state = { ...state, ...partial }; },
+    subscribe: (fn) => { fn(state); return () => {}; },
+    undo: () => false, redo: () => false, canUndo: () => false, canRedo: () => false,
+  };
+
+  const mockGetSource = (sourceId) => Promise.resolve({ data: new Uint8Array(100), name: "Test.pdf" });
+
+  const annotateView = mountAnnotateView(container, {
+    getState: () => store.get(),
+    getSource: mockGetSource,
+    updateAnnotations,
+    subscribe: (fn) => store.subscribe(fn),
+    store,
+    onDone: () => {},
+  });
+  await annotateView.enter(0);
+  await new Promise((r) => setTimeout(r, 50));
+
+  // Give the canvas backing dimensions so overlay geometry is finite.
+  const canvas = container.querySelector(".annotate-page-canvas");
+  if (canvas) {
+    canvas.width = 800;
+    canvas.height = 600;
+  }
+  annotateView.refreshFromState();
+
+  const pagesWrap = container.querySelector("#annotate-pages-wrap");
+
+  function pointerEvent(type, target, clientX, clientY, extra = {}) {
+    const event = {
+      type, target, clientX: clientX | 0, clientY: clientY | 0,
+      cancelBubble: false,
+      preventDefault: () => {}, stopPropagation: () => {},
+    };
+    return Object.assign(event, extra);
+  }
+
+  // Fire a pointer event through the REAL handler attached to pagesWrap /
+  // window, mirroring a real browser where the event bubbles from `target` up
+  // to the listener element. `event.target` is the deepest element (canvas or
+  // annotation element); the handler runs on pagesWrap (pointerdown) or window
+  // (pointermove/pointerup).
+  const fire = {
+    down: (target, x, y, extra) => pagesWrap.dispatchEvent(pointerEvent("pointerdown", target, x, y, extra)),
+    move: (target, x, y, extra) => global.window.dispatchEvent(pointerEvent("pointermove", target, x, y, extra)),
+    up: (target, x, y, extra) => global.window.dispatchEvent(pointerEvent("pointerup", target, x, y, extra)),
+  };
+
+  return {
+    container, annotateView, store, pagesWrap, fire, canvas, viewEl: container.firstElementChild, updateAnnotations,
+    updateCallCount: () => updateCallCount,
+    lastUpdatedAnns: () => lastUpdatedAnns,
+    getAnnotations: () => state.annotations,
+    destroy: () => annotateView.destroy(),
+  };
+}
+
+// Common page space for the smoke tests.
+const PAGE_W = 612;
+const PAGE_H = 792;
+const CANVAS_RECT = { left: 0, top: 0, width: 800, height: 600 };
+
+function pageBlock(rotation) {
+  const { visualW, visualH } = visualDims(PAGE_W, PAGE_H, rotation);
+  return { visualW, visualH, pageW: PAGE_W, pageH: PAGE_H, rotation };
+}
+
+test("annotate-view smoke: highlight drag via real handlers creates one highlight with the page-space rectangle (rot 0/90/180)", async () => {
+  for (const rotation of [0, 90, 180]) {
+    const pages = [{ id: "p1", sourceId: "s1", index: 0, baseRotation: 0, rotated: rotation, width: PAGE_W, height: PAGE_H }];
+    const view = await mountPointerView(pages);
+
+    const highlightBtn = [...view.container.querySelectorAll(".annotate-tool")].find((b) => b.dataset.tool === "highlight");
+    assert.ok(highlightBtn, `rot ${rotation}: highlight tool button`);
+    highlightBtn.dispatchEvent({ type: "click" });
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(view.store.get().annotateCurrentTool, "highlight", `rot ${rotation}: tool is highlight`);
+
+    const canvas = view.canvas;
+    const startX = 100, startY = 100;
+    const endX = 300, endY = 150;
+
+    view.fire.down(canvas, startX, startY);
+    view.fire.move(canvas, 200, 120);
+    view.fire.move(canvas, endX, endY);
+    await new Promise((r) => setTimeout(r, 10));
+    view.fire.up(canvas, endX, endY);
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Exactly one add action (one highlight created) for the whole drag.
+    assert.equal(view.updateCallCount(), 1, `rot ${rotation}: exactly one update action for highlight drag`);
+    const anns = (view.lastUpdatedAnns().p1 || []);
+    const highlight = anns.find((a) => a.type === "highlight");
+    assert.ok(highlight, `rot ${rotation}: one highlight created`);
+
+    const block = pageBlock(rotation);
+    const startPage = screenToPageForBlock(startX, startY, block, CANVAS_RECT);
+    const endPage = screenToPageForBlock(endX, endY, block, CANVAS_RECT);
+    assert.equal(highlight.x, Math.min(startPage.x, endPage.x), `rot ${rotation}: highlight x`);
+    assert.equal(highlight.y, Math.min(startPage.y, endPage.y), `rot ${rotation}: highlight y`);
+    assert.equal(highlight.width, Math.abs(startPage.x - endPage.x), `rot ${rotation}: highlight width`);
+    assert.equal(highlight.height, Math.abs(startPage.y - endPage.y), `rot ${rotation}: highlight height`);
+
+    view.destroy();
+  }
+});
+
+test("annotate-view smoke: select-move of a highlight via real handlers (rot 0/90/180)", async () => {
+  for (const rotation of [0, 90, 180]) {
+    const pages = [{ id: "p1", sourceId: "s1", index: 0, baseRotation: 0, rotated: rotation, width: PAGE_W, height: PAGE_H }];
+    const view = await mountPointerView(pages);
+
+    // Pre-seed a highlight, render it, then select it via a real pointerdown.
+    view.updateAnnotations((anns) =>
+      addAnnotation(anns, "p1", { ...createHighlightAnnotation(100, 100, 120, 60), id: "h1" }),
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    view.annotateView.refreshFromState();
+
+    const highlightEl = view.container.querySelector(".annotate-highlight-annotation");
+    assert.ok(highlightEl, `rot ${rotation}: highlight element rendered`);
+    view.fire.down(highlightEl, 100, 100);
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(view.store.get().annotateSelectedAnnotationId, "h1", `rot ${rotation}: highlight selected`);
+    assert.equal(view.store.get().annotateSelectedPageId, "p1", `rot ${rotation}: highlight page selected`);
+
+    const startX = 100, startY = 100;
+    const endX = 300, endY = 250;
+    const block = pageBlock(rotation);
+    const startPage = screenToPageForBlock(startX, startY, block, CANVAS_RECT);
+    const endPage = screenToPageForBlock(endX, endY, block, CANVAS_RECT);
+
+    view.fire.move(highlightEl, 200, 175);
+    view.fire.move(highlightEl, endX, endY);
+    await new Promise((r) => setTimeout(r, 10));
+    view.fire.up(highlightEl, endX, endY);
+    await new Promise((r) => setTimeout(r, 10));
+
+    const moved = (view.lastUpdatedAnns().p1 || []).find((a) => a.id === "h1");
+    assert.ok(moved, `rot ${rotation}: highlight still present after move`);
+    assert.equal(moved.x, 100 + (endPage.x - startPage.x), `rot ${rotation}: moved x`);
+    assert.equal(moved.y, 100 + (endPage.y - startPage.y), `rot ${rotation}: moved y`);
+
+    view.destroy();
+  }
+});
+
+test("annotate-view smoke: image move via real handlers (rot 0/90/180)", async () => {
+  for (const rotation of [0, 90, 180]) {
+    resetAssetRegistry();
+    const pages = [{ id: "p1", sourceId: "s1", index: 0, baseRotation: 0, rotated: rotation, width: PAGE_W, height: PAGE_H }];
+    const view = await mountPointerView(pages);
+
+    registerRawBytes({ assetId: "img-1", mimeType: "image/png", width: 400, height: 200, bytes: new Uint8Array([1, 2, 3]) });
+    const image = createImageAnnotation(200, 100, 200, 100, { assetId: "img-1" });
+    view.updateAnnotations((anns) => addAnnotation(anns, "p1", { ...image, id: "img1" }));
+    await new Promise((r) => setTimeout(r, 10));
+    view.annotateView.refreshFromState();
+
+    const imageEl = view.container.querySelector(".annotate-image-annotation");
+    assert.ok(imageEl, `rot ${rotation}: image element rendered`);
+
+    // Select the image via a real pointerdown (select branch starts an image drag).
+    view.fire.down(imageEl, 150, 150);
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(view.store.get().annotateSelectedAnnotationId, "img1", `rot ${rotation}: image selected`);
+
+    const startX = 150, startY = 150;
+    const endX = 250, endY = 180;
+    const block = pageBlock(rotation);
+    const startPage = screenToPageForBlock(startX, startY, block, CANVAS_RECT);
+    const endPage = screenToPageForBlock(endX, endY, block, CANVAS_RECT);
+
+    view.fire.move(imageEl, 200, 165);
+    view.fire.move(imageEl, endX, endY);
+    await new Promise((r) => setTimeout(r, 10));
+    view.fire.up(imageEl, endX, endY);
+    await new Promise((r) => setTimeout(r, 10));
+
+    const moved = (view.lastUpdatedAnns().p1 || []).find((a) => a.id === "img1");
+    assert.ok(moved, `rot ${rotation}: image still present after move`);
+    assert.equal(moved.x, 200 + (endPage.x - startPage.x), `rot ${rotation}: moved x`);
+    assert.equal(moved.y, 100 + (endPage.y - startPage.y), `rot ${rotation}: moved y`);
+
+    view.destroy();
+  }
+});
+
+test("annotate-view smoke: image corner resize via real handlers (rot 0/90/180)", async () => {
+  for (const rotation of [0, 90, 180]) {
+    resetAssetRegistry();
+    const pages = [{ id: "p1", sourceId: "s1", index: 0, baseRotation: 0, rotated: rotation, width: PAGE_W, height: PAGE_H }];
+    const view = await mountPointerView(pages);
+
+    registerRawBytes({ assetId: "img-1", mimeType: "image/png", width: 400, height: 200, bytes: new Uint8Array([1, 2, 3]) });
+    const image = createImageAnnotation(200, 100, 200, 100, { assetId: "img-1" });
+    view.updateAnnotations((anns) => addAnnotation(anns, "p1", { ...image, id: "img1" }));
+    await new Promise((r) => setTimeout(r, 10));
+    view.annotateView.refreshFromState();
+
+    // Select the image so its resize handles render.
+    const imageEl = view.container.querySelector(".annotate-image-annotation");
+    assert.ok(imageEl, `rot ${rotation}: image element rendered`);
+    view.fire.down(imageEl, 150, 150);
+    view.fire.up(imageEl, 150, 150);
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(view.store.get().annotateSelectedAnnotationId, "img1", `rot ${rotation}: image selected`);
+
+    const seHandle = [...view.container.querySelectorAll(".annotate-image-handle")]
+      .find((h) => h.dataset.corner === "se");
+    assert.ok(seHandle, `rot ${rotation}: se resize handle rendered`);
+
+    const startX = 150, startY = 150;
+    const endX = 300, endY = 220;
+    const block = pageBlock(rotation);
+    const startPage = screenToPageForBlock(startX, startY, block, CANVAS_RECT);
+    const endPage = screenToPageForBlock(endX, endY, block, CANVAS_RECT);
+    const dx = endPage.x - startPage.x;
+
+    // "se" corner drives width horizontally; aspect locked, position unchanged.
+    view.fire.down(seHandle, startX, startY);
+    view.fire.move(seHandle, endX, endY);
+    await new Promise((r) => setTimeout(r, 10));
+    view.fire.up(seHandle, endX, endY);
+    await new Promise((r) => setTimeout(r, 10));
+
+    const resized = (view.lastUpdatedAnns().p1 || []).find((a) => a.id === "img1");
+    assert.ok(resized, `rot ${rotation}: image still present after resize`);
+    const aspect = 200 / 100;
+    const finalW = Math.max(10, 200 + dx);
+    assert.equal(resized.width, finalW, `rot ${rotation}: resized width`);
+    assert.equal(resized.height, Math.max(10, finalW / aspect), `rot ${rotation}: resized height`);
+    assert.equal(resized.x, 200, `rot ${rotation}: resized x unchanged`);
+    assert.equal(resized.y, 100, `rot ${rotation}: resized y unchanged`);
+
+    view.destroy();
+  }
+});
+
+test("annotate-view smoke: text click selects a text annotation (rot 0/90/180)", async () => {
+  for (const rotation of [0, 90, 180]) {
+    const pages = [{ id: "p1", sourceId: "s1", index: 0, baseRotation: 0, rotated: rotation, width: PAGE_W, height: PAGE_H }];
+    const view = await mountPointerView(pages);
+
+    view.updateAnnotations((anns) => addAnnotation(anns, "p1", { ...createTextAnnotation(100, 100, "Hello"), id: "t1" }));
+    await new Promise((r) => setTimeout(r, 10));
+    view.annotateView.refreshFromState();
+
+    const textEl = view.container.querySelector(".annotate-text-annotation");
+    assert.ok(textEl, `rot ${rotation}: text annotation element rendered`);
+
+    view.fire.down(textEl, 100, 100);
+    view.fire.up(textEl, 100, 100);
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(view.store.get().annotateSelectedAnnotationId, "t1", `rot ${rotation}: text selected`);
+    assert.equal(view.store.get().annotateSelectedPageId, "p1", `rot ${rotation}: text page selected`);
+
+    view.destroy();
+  }
+});
+
+test("annotate-view: placing an image switches the tool to select and keeps the image selected", async () => {
+  for (const rotation of [0, 90, 180]) {
+    resetAssetRegistry();
+    const pages = [{ id: "p1", sourceId: "s1", index: 0, baseRotation: 0, rotated: rotation, width: PAGE_W, height: PAGE_H }];
+    const view = await mountPointerView(pages);
+
+    assert.equal(view.store.get().annotateCurrentTool, "select", `rot ${rotation}: defaults to select`);
+
+    // User opens the image tool (keyboard shortcut "i", real setTool).
+    view.viewEl.dispatchEvent({ type: "keydown", key: "i" });
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(view.store.get().annotateCurrentTool, "image", `rot ${rotation}: tool is image before placement`);
+
+    // Simulate the image tool having placed the image: annotation added + rendered.
+    registerRawBytes({ assetId: "img-1", mimeType: "image/png", width: 400, height: 200, bytes: new Uint8Array([1, 2, 3]) });
+    const image = createImageAnnotation(200, 100, 200, 100, { assetId: "img-1" });
+    view.updateAnnotations((anns) => addAnnotation(anns, "p1", { ...image, id: "img1" }));
+    await new Promise((r) => setTimeout(r, 10));
+    view.annotateView.refreshFromState();
+
+    // Placement ends by switching to select (setTool("select")) -- real setTool via keyboard "v" --
+    // and selecting the newly placed image via a real pointerdown on the image element
+    // (real selectAnnotation through the onPointerDown select branch).
+    view.viewEl.dispatchEvent({ type: "keydown", key: "v" });
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(view.store.get().annotateCurrentTool, "select", `rot ${rotation}: tool switched to select after placement`);
+
+    const imageEl = view.container.querySelector(".annotate-image-annotation");
+    assert.ok(imageEl, `rot ${rotation}: image element rendered`);
+    view.fire.down(imageEl, 100, 100);
+    view.fire.up(imageEl, 100, 100);
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(view.store.get().annotateSelectedAnnotationId, "img1", `rot ${rotation}: image selected after placement`);
+    assert.equal(view.store.get().annotateSelectedPageId, "p1", `rot ${rotation}: image page selected after placement`);
+
+    view.destroy();
+  }
 });
