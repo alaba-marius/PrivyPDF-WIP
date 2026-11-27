@@ -809,6 +809,18 @@ html { overflow: hidden; }
   border-radius: 2px;
 }
 
+/* Crosshair cursor when the highlight tool snaps to digital text */
+.annotate-overlay.annotate-cursor-crosshair {
+  cursor: crosshair;
+}
+
+/* Per-line preview bar while a highlight drag snaps to text lines */
+.annotate-selection-preview {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 2px;
+}
+
 /* Image annotation element */
 .annotate-image-annotation {
   position: absolute;
@@ -1089,6 +1101,7 @@ html { overflow: hidden; }
   .annotate-text-annotation,
   .annotate-highlight-annotation,
   .annotate-highlight-preview,
+  .annotate-selection-preview,
   .annotate-text-input {
     transition: none !important;
     animation: none !important;

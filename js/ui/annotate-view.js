@@ -34,6 +34,7 @@ import {
   validateTextForHelvetica,
   annotationDefaultsFromState,
 } from "../core/annotations.js";
+import { textLayerCache, hitTestText, selectionRects } from "../core/text-layer.js";
 
 const TOOLS = ["select", "text", "highlight", "image"];
 const TEXT_PRESET_SIZES = [8, 10, 12, 14, 16, 18, 24, 36, 48, 72];
@@ -106,6 +107,10 @@ export function mountAnnotateView(root, opts = {}) {
   let isDrawingHighlight = false;
   let highlightStart = { x: 0, y: 0 };
   let highlightPageId = null;
+  // Text snapping state for the highlight tool: while true, the current drag
+  // snaps to digital text and produces one highlight bar per text line.
+  let highlightSnapping = false;
+  let highlightStartPos = null; // { lineIndex, charIndex, side }
   // Image annotation drag/resize state
   let isDraggingImage = false;
   let isResizingImage = false;
@@ -365,6 +370,14 @@ export function mountAnnotateView(root, opts = {}) {
     return ((page.baseRotation || 0) + (page.rotated || 0)) % 360;
   }
 
+  // Get the cached text layer for a page, if one has been extracted. Returns
+  // null when no layer is ready — extraction is lazy and never blocks pointer
+  // handling, so a missing layer just means free-rectangle highlighting.
+  function textLayerForPage(page) {
+    const key = `${page.sourceId}:${page.index}`;
+    return textLayerCache.getSync(key);
+  }
+
   // Build the page layout and create DOM structure
   function buildPageStructure() {
     const state = getState();
@@ -586,6 +599,13 @@ export function mountAnnotateView(root, opts = {}) {
       }
 
       canvasData.page = await pdfjsDoc.getPage(currentPage.index + 1);
+      // Prefetch the text layer for this page (lazy, non-blocking). If the
+      // layer isn't ready when the pointer goes down, highlight falls back to
+      // a free rectangle.
+      const tlKey = `${currentPage.sourceId}:${currentPage.index}`;
+      if (!textLayerCache.has(tlKey)) {
+        textLayerCache.get(tlKey, canvasData.page).catch(() => {});
+      }
       canvasData.viewport = canvasData.page.getViewport({ scale: zoom, rotation });
       canvasData.canvas.width = canvasData.viewport.width;
       canvasData.canvas.height = canvasData.viewport.height;
@@ -649,8 +669,15 @@ export function mountAnnotateView(root, opts = {}) {
     const visualWidth = canvasData.canvas.width;
     const visualHeight = canvasData.canvas.height;
 
-    // Clear overlay
+    // Clear overlay (`innerHTML = ""` does this in a real browser). Note: the test
+    // harness's innerHTML setter does not detach children, so live highlight
+    // previews are removed explicitly where a highlight drag is committed or
+    // cancelled (see onPointerUp / onKeyDown).
     overlay.innerHTML = "";
+    overlay.className = "annotate-overlay";
+    if (isDrawingHighlight && currentTool === "highlight" && highlightSnapping && highlightPageId === pageId) {
+      overlay.className += " annotate-cursor-crosshair";
+    }
 
     // Render annotations from state
     const anns = getPageAnnotations(state.annotations || {}, page.id);
@@ -732,35 +759,36 @@ export function mountAnnotateView(root, opts = {}) {
     overlay.appendChild(el);
   }
 
+  // Screen bounding box of a page-space highlight rectangle: the bounding box
+  // of its four corners mapped to screen at the page's effective rotation, so
+  // width/height stay positive at rotations 180/270. One function for the live
+  // preview and the committed bars alike.
+  function screenRectForHighlight(x, y, width, height, page, rotation, visualWidth, visualHeight) {
+    const block = {
+      pageW: page.width,
+      pageH: page.height,
+      visualW: visualWidth / zoom,
+      visualH: visualHeight / zoom,
+      rotation,
+    };
+    const bounds = { left: 0, top: 0, width: visualWidth, height: visualHeight };
+    return pageRectToScreen(x, y, width, height, block, bounds);
+  }
+
   function renderHighlightAnnotation(ann, page, rotation, visualWidth, visualHeight, overlay) {
-    const mockBlock = { visualW: visualWidth / zoom, visualH: visualHeight / zoom, rotation };
-    const mockRect = { left: 0, top: 0, width: visualWidth, height: visualHeight };
-
-    // Highlight is a rectangle in page space: x, y, width, height (origin bottom-left)
-    const corners = [
-      { x: ann.x, y: ann.y },
-      { x: ann.x + ann.width, y: ann.y },
-      { x: ann.x + ann.width, y: ann.y + ann.height },
-      { x: ann.x, y: ann.y + ann.height },
-    ];
-    const screenCorners = corners.map((c) => pageToScreenForBlock(c.x, c.y, mockBlock, mockRect)).filter(Boolean);
-    if (screenCorners.length < 4) return;
-
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const c of screenCorners) {
-      minX = Math.min(minX, c.clientX);
-      minY = Math.min(minY, c.clientY);
-      maxX = Math.max(maxX, c.clientX);
-      maxY = Math.max(maxY, c.clientY);
-    }
+    // Highlight is a rectangle in page space: x, y, width, height (origin bottom-left).
+    // Same page-rect→screen-rect function as the preview (screenRectForHighlight),
+    // so committed bars and preview bars are placed and sized identically.
+    const screen = screenRectForHighlight(ann.x, ann.y, ann.width, ann.height, page, rotation, visualWidth, visualHeight);
+    if (!screen) return;
 
     const el = document.createElement("div");
     el.className = `annotate-highlight-annotation${ann.id === selectedAnnotationId ? " selected" : ""}`;
     el.dataset.annotationId = ann.id;
-    el.style.left = `${minX}px`;
-    el.style.top = `${minY}px`;
-    el.style.width = `${maxX - minX}px`;
-    el.style.height = `${maxY - minY}px`;
+    el.style.left = `${screen.left}px`;
+    el.style.top = `${screen.top}px`;
+    el.style.width = `${screen.width}px`;
+    el.style.height = `${screen.height}px`;
     el.style.background = ann.color || DEFAULT_HIGHLIGHT_COLOR;
     el.style.opacity = ann.opacity ?? DEFAULT_HIGHLIGHT_OPACITY;
     el.tabIndex = -1;
@@ -795,9 +823,56 @@ export function mountAnnotateView(root, opts = {}) {
   }
 
   function renderHighlightPreview(pageId, page, rotation, visualWidth, visualHeight, overlay) {
-    const existing = overlay.querySelector(".annotate-highlight-preview");
-    if (existing) existing.remove();
+    const state = getState();
+    const highlightDefaults = annotationDefaultsFromState(state, "highlight");
 
+    // Clear any previous preview of either kind
+    for (const sel of [".annotate-highlight-preview", ".annotate-selection-preview"]) {
+      for (const el of overlay.querySelectorAll(sel)) el.remove();
+    }
+
+    // Text snapping: render one preview bar per text line covered by the drag.
+    if (highlightSnapping && highlightStartPos) {
+      const layer = textLayerForPage(page);
+      const endPos = layer ? hitTestText(layer, dragAnnotationStart) : null;
+      if (layer && endPos) {
+        overlay.classList.add("annotate-cursor-crosshair");
+        const rects = selectionRects(layer, highlightStartPos, endPos);
+        // Page-space line rects → screen with the same pure page-rect→screen-rect
+        // function as committed bars (screenRectForHighlight), so snapped preview
+        // bars keep real width/height at rotations 90/180/270 instead of
+        // collapsing to height 0.
+        const block = {
+          pageW: page.width,
+          pageH: page.height,
+          visualW: visualWidth / zoom,
+          visualH: visualHeight / zoom,
+          rotation,
+        };
+        const bounds = { left: 0, top: 0, width: visualWidth, height: visualHeight };
+        for (const rect of rects) {
+          const screen = pageRectToScreen(rect.x, rect.y, rect.width, rect.height, block, bounds);
+          if (!screen) continue;
+          const el = document.createElement("div");
+          el.className = "annotate-selection-preview";
+          el.style.left = `${screen.left}px`;
+          el.style.top = `${screen.top}px`;
+          el.style.width = `${screen.width}px`;
+          el.style.height = `${screen.height}px`;
+          el.style.background = highlightDefaults.color;
+          el.style.opacity = highlightDefaults.opacity;
+          el.style.pointerEvents = "none";
+          overlay.appendChild(el);
+        }
+        return;
+      }
+      // No text under the end point: fall through to free-rectangle preview.
+      overlay.classList.remove("annotate-cursor-crosshair");
+    } else {
+      overlay.classList.remove("annotate-cursor-crosshair");
+    }
+
+    // Free-rectangle preview
     const x = Math.min(highlightStart.x, dragAnnotationStart.x);
     const y = Math.min(highlightStart.y, dragAnnotationStart.y);
     const width = Math.abs(highlightStart.x - dragAnnotationStart.x);
@@ -805,41 +880,35 @@ export function mountAnnotateView(root, opts = {}) {
 
     if (width < 1 || height < 1) return;
 
-    const mockBlock = { visualW: visualWidth / zoom, visualH: visualHeight / zoom, rotation };
-    const mockRect = { left: 0, top: 0, width: visualWidth, height: visualHeight };
-
-    const corners = [
-      { x, y },
-      { x: x + width, y },
-      { x: x + width, y: y + height },
-      { x, y: y + height },
-    ];
-    const screenCorners = corners.map((c) => pageToScreenForBlock(c.x, c.y, mockBlock, mockRect)).filter(Boolean);
-    if (screenCorners.length < 4) return;
-
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const c of screenCorners) {
-      minX = Math.min(minX, c.clientX);
-      minY = Math.min(minY, c.clientY);
-      maxX = Math.max(maxX, c.clientX);
-      maxY = Math.max(maxY, c.clientY);
-    }
-
-    // Use store state for preview color and opacity
-    const state = getState();
-    const highlightDefaults = annotationDefaultsFromState(state, "highlight");
+    // Free-rectangle preview — same page-rect→screen-rect mapping as the
+    // snapped bars and committed annotations.
+    const screen = screenRectForHighlight(x, y, width, height, page, rotation, visualWidth, visualHeight);
+    if (!screen) return;
 
     const el = document.createElement("div");
     el.className = "annotate-highlight-preview";
-    el.style.left = `${minX}px`;
-    el.style.top = `${minY}px`;
-    el.style.width = `${maxX - minX}px`;
-    el.style.height = `${maxY - minY}px`;
+    el.style.left = `${screen.left}px`;
+    el.style.top = `${screen.top}px`;
+    el.style.width = `${screen.width}px`;
+    el.style.height = `${screen.height}px`;
     el.style.background = highlightDefaults.color;
     el.style.opacity = highlightDefaults.opacity;
     el.style.pointerEvents = "none";
 
     overlay.appendChild(el);
+  }
+
+  // Remove any live highlight preview elements from a page's overlay. Previews
+  // are appended directly to the overlay (they are not annotations), so they are
+  // cleared explicitly when a highlight drag is committed or cancelled.
+  function clearHighlightPreviews(pageId) {
+    const cd = pageCanvases.get(pageId);
+    if (!cd) return;
+    const ov = cd.wrapper.querySelector(".annotate-overlay");
+    if (!ov) return;
+    for (const sel of [".annotate-selection-preview", ".annotate-highlight-preview"]) {
+      for (const el of ov.querySelectorAll(sel)) el.remove();
+    }
   }
 
   // Position the floating tool palette at the left edge of the page area,
@@ -1148,6 +1217,20 @@ export function mountAnnotateView(root, opts = {}) {
       highlightStart = { ...pagePoint };
       dragAnnotationStart = { ...pagePoint };
       highlightPageId = pageId;
+      highlightSnapping = false;
+      highlightStartPos = null;
+      // Alt + pointerdown forces free-rectangle mode. Otherwise snap to digital
+      // text when the text layer is ready and the pointer hits a character.
+      if (!e.altKey) {
+        const layer = textLayerForPage(page);
+        if (layer) {
+          const pos = hitTestText(layer, pagePoint);
+          if (pos) {
+            highlightSnapping = true;
+            highlightStartPos = pos;
+          }
+        }
+      }
     } else if (currentTool === "image") {
       // Click to place an image: open file picker, then insert at click position.
       // Placement is computed in visual space (centered on the visual click, aspect
@@ -1352,7 +1435,36 @@ export function mountAnnotateView(root, opts = {}) {
       const page = state.pages.find((p) => p.id === highlightPageId);
       if (!page) return;
 
-      // Normalize rectangle
+      // Text snapping: create one highlight bar per text line in a single
+      // updateAnnotations call (one undo entry). Fall back to a free
+      // rectangle when no text layer is ready or the drag misses the text.
+      if (highlightSnapping && highlightStartPos) {
+        const layer = textLayerForPage(page);
+        const endPos = layer ? hitTestText(layer, dragAnnotationStart) : null;
+        if (layer && endPos) {
+          const rects = selectionRects(layer, highlightStartPos, endPos);
+          if (rects.length > 0) {
+            const highlightDefaults = annotationDefaultsFromState(state, "highlight");
+            const anns = rects.map((r) => createHighlightAnnotation(r.x, r.y, r.width, r.height, {
+              color: highlightDefaults.color,
+              opacity: highlightDefaults.opacity,
+            }));
+            updateAnnotations((anns0) => {
+              let result = anns0;
+              for (const ann of anns) result = addAnnotation(result, highlightPageId, ann);
+              return result;
+            });
+            renderAllOverlays();
+            clearHighlightPreviews(highlightPageId);
+            highlightSnapping = false;
+            highlightStartPos = null;
+            return;
+          }
+        }
+        // Fall through to free-rectangle fallback (no text, or end missed text)
+      }
+
+      // Normalize rectangle (free-rectangle fallback)
       const x = Math.min(highlightStart.x, dragAnnotationStart.x);
       const y = Math.min(highlightStart.y, dragAnnotationStart.y);
       const width = Math.abs(highlightStart.x - dragAnnotationStart.x);
@@ -1367,6 +1479,9 @@ export function mountAnnotateView(root, opts = {}) {
         updateAnnotations((anns) => addAnnotation(anns, highlightPageId, ann));
       }
       renderAllOverlays();
+      clearHighlightPreviews(highlightPageId);
+      highlightSnapping = false;
+      highlightStartPos = null;
     }
   }
 
@@ -1377,7 +1492,16 @@ export function mountAnnotateView(root, opts = {}) {
     if (e.key === "Escape") {
       if (isDrawingHighlight) {
         isDrawingHighlight = false;
+        highlightSnapping = false;
+        highlightStartPos = null;
+        // Clear the crosshair cursor from the highlight page's overlay
+        const cd = pageCanvases.get(highlightPageId);
+        if (cd) {
+          const ov = cd.wrapper.querySelector(".annotate-overlay");
+          if (ov) ov.className = "annotate-overlay";
+        }
         renderAllOverlays();
+        clearHighlightPreviews(highlightPageId);
       } else if (textInput) {
         cancelTextInput();
       } else if (selectedAnnotationId) {
@@ -1678,6 +1802,11 @@ export function mountAnnotateView(root, opts = {}) {
       document.removeEventListener("keydown", documentKeyDownHandler);
       documentKeyDownHandler = null;
     }
+    // Remove the window-level pointer handlers added on mount so repeated
+    // mount/cleanup cycles do not accumulate them.
+    window.removeEventListener("pointermove", onPointerMove);
+    window.removeEventListener("pointerup", onPointerUp);
+    window.removeEventListener("pointercancel", onPointerUp);
 
     // Clean up
     if (scrollHandler) {

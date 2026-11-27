@@ -2,12 +2,14 @@
 // This catches undefined names and recursion bugs
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { globSync } from "node:fs";
 import { createStore } from "../js/core/store.js";
 import { addAnnotation, createHighlightAnnotation, createImageAnnotation, createTextAnnotation } from "../js/core/annotations.js";
 import { mountAnnotateView } from "../js/ui/annotate-view.js";
+import { textLayerCache } from "../js/core/text-layer.js";
 import { mountPanel } from "../js/ui/panel.js";
 import { computeImagePlacement, registerRawBytes, resetAssetRegistry } from "../js/core/image-assets.js";
-import { screenToPageForBlock, visualDims } from "../js/core/annotate-layout.js";
+import { screenToPageForBlock, pageToScreenForBlock, visualDims } from "../js/core/annotate-layout.js";
 
 // ---- Minimal Fake DOM implementation ----
 
@@ -15,7 +17,20 @@ class FakeElement {
   constructor(tagName) {
     this.tagName = tagName.toUpperCase();
     this.className = "";
-    this.style = {};
+    // Recorded inline styles (CSSOM): tests assert what the real view sets
+    // (left/top/width/height on highlight preview and committed bars).
+    const styleProps = {};
+    this._styleRecords = [];
+    this.style = new Proxy(styleProps, {
+      set: (target, prop, value) => {
+        target[prop] = String(value);
+        this._styleRecords.push({ prop: String(prop), value: String(value) });
+        return true;
+      },
+      get(target, prop) {
+        return prop in target ? target[prop] : undefined;
+      },
+    });
     this.dataset = {};
     this.attributes = new Map();
     this.children = [];
@@ -2266,6 +2281,242 @@ test("annotate-view smoke: highlight drag via real handlers creates one highligh
   }
 });
 
+test("annotate-view smoke: highlight drag snaps to text lines, one bar per line, one undo entry (rot 0/90/180/270)", async () => {
+  const textLayer = {
+    lines: [
+      { dir: 0, from: 100, to: 200, baseline: 700, descent: 682.4, ascent: 770.4,
+        chars: [
+          { ch: "H", from: 100, to: 120 },
+          { ch: "e", from: 120, to: 140 },
+          { ch: "l", from: 140, to: 160 },
+          { ch: "l", from: 160, to: 180 },
+          { ch: "o", from: 180, to: 200 },
+        ] },
+      { dir: 0, from: 100, to: 200, baseline: 600, descent: 582.4, ascent: 670.4,
+        chars: [
+          { ch: "W", from: 100, to: 120 },
+          { ch: "o", from: 120, to: 140 },
+          { ch: "r", from: 140, to: 160 },
+          { ch: "l", from: 160, to: 180 },
+          { ch: "d", from: 180, to: 200 },
+        ] },
+    ],
+  };
+
+  for (const rotation of [0, 90, 180, 270]) {
+    textLayerCache.clear();
+    const pages = [{ id: "p1", sourceId: "s1", index: 0, baseRotation: 0, rotated: rotation, width: PAGE_W, height: PAGE_H }];
+    const view = await mountPointerView(pages);
+
+    // Inject the text layer for this page (key = sourceId:index).
+    textLayerCache.set("s1:0", textLayer);
+
+    const highlightBtn = [...view.container.querySelectorAll(".annotate-tool")].find((b) => b.dataset.tool === "highlight");
+    assert.ok(highlightBtn, `rot ${rotation}: highlight tool button`);
+    highlightBtn.dispatchEvent({ type: "click" });
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(view.store.get().annotateCurrentTool, "highlight", `rot ${rotation}: tool is highlight`);
+
+    const block = pageBlock(rotation);
+    const canvas = view.canvas;
+
+    // Start on line 0 ("H"), end on line 1 ("r"). Page-space points are
+    // rotation-independent; convert to screen for the real pointer handlers.
+    const startScreen = pageToScreenForBlock(105, 720, block, CANVAS_RECT);
+    const endScreen = pageToScreenForBlock(145, 610, block, CANVAS_RECT);
+
+    view.fire.down(canvas, startScreen.clientX, startScreen.clientY);
+    view.fire.move(canvas, endScreen.clientX, endScreen.clientY);
+    await new Promise((r) => setTimeout(r, 10));
+    view.fire.up(canvas, endScreen.clientX, endScreen.clientY);
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Exactly one update action wrapping all line rects -> one undo entry.
+    assert.equal(view.updateCallCount(), 1, `rot ${rotation}: exactly one update action for snapped highlight`);
+    const anns = (view.lastUpdatedAnns().p1 || []);
+    const highlights = anns.filter((a) => a.type === "highlight");
+    assert.equal(highlights.length, 2, `rot ${rotation}: one highlight bar per text line`);
+
+    // Page-space rectangles are identical at every rotation.
+    assert.ok(Math.abs(highlights[0].x - 99.5) < 0.01 && Math.abs(highlights[0].y - 681.9) < 0.01
+      && Math.abs(highlights[0].width - 101) < 0.01 && Math.abs(highlights[0].height - 89) < 0.01,
+      `rot ${rotation}: first line rect`);
+    assert.ok(Math.abs(highlights[1].x - 99.5) < 0.01 && Math.abs(highlights[1].y - 581.9) < 0.01
+      && Math.abs(highlights[1].width - 41) < 0.01 && Math.abs(highlights[1].height - 89) < 0.01,
+      `rot ${rotation}: second line rect`);
+    for (const h of highlights) {
+      assert.equal(h.color, "#ffe14d", `rot ${rotation}: default highlight color`);
+      assert.equal(h.opacity, 0.4, `rot ${rotation}: default highlight opacity`);
+    }
+
+    textLayerCache.clear();
+    view.destroy();
+  }
+});
+
+test("annotate-view smoke: highlight drag at rotation 180 snaps to text, shows a preview and commits a real-sized bar", async () => {
+  // At rotation 180 a visual left-to-right drag is page-space right-to-left
+  // (reverse along the baseline), which used to produce zero snapped bars.
+  const textLayer = {
+    lines: [
+      { dir: 0, from: 100, to: 200, baseline: 700, descent: 682.4, ascent: 770.4,
+        chars: [
+          { ch: "H", from: 100, to: 120 }, { ch: "e", from: 120, to: 140 },
+          { ch: "l", from: 140, to: 160 }, { ch: "l", from: 160, to: 180 },
+          { ch: "o", from: 180, to: 200 },
+        ] },
+    ],
+  };
+  textLayerCache.clear();
+  const page = { id: "p1", sourceId: "s1", index: 0, baseRotation: 0, rotated: 180, width: PAGE_W, height: PAGE_H };
+  const view = await mountPointerView([page]);
+  textLayerCache.set("s1:0", textLayer);
+
+  const highlightBtn = [...view.container.querySelectorAll(".annotate-tool")].find((b) => b.dataset.tool === "highlight");
+  assert.ok(highlightBtn, "rot 180: highlight tool button");
+  highlightBtn.dispatchEvent({ type: "click" });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(view.store.get().annotateCurrentTool, "highlight", "rot 180: tool is highlight");
+
+  const block = pageBlock(180);
+  const canvas = view.canvas;
+  const overlay = view.container.querySelector(".annotate-overlay");
+  assert.ok(overlay, "rot 180: overlay exists");
+
+  // Visual forward drag (screen left -> right). At rotation 180 this is page-space
+  // right -> left (reverse), the case that previously produced nothing.
+  const startScreen = pageToScreenForBlock(190, 720, block, CANVAS_RECT);
+  const endScreen = pageToScreenForBlock(110, 720, block, CANVAS_RECT);
+
+  view.fire.down(canvas, startScreen.clientX, startScreen.clientY);
+  await new Promise((r) => setTimeout(r, 10));
+  view.fire.move(canvas, endScreen.clientX, endScreen.clientY);
+  await new Promise((r) => setTimeout(r, 10));
+
+  const previews = overlay.querySelectorAll(".annotate-selection-preview");
+  assert.ok(previews.length >= 1, "rot 180: selection preview present during drag");
+  for (const prev of previews) {
+    const width = parseFloat(prev.style.width || "0");
+    const height = parseFloat(prev.style.height || "0");
+    assert.ok(width > 5, `rot 180: preview width > 5 css px (got ${width})`);
+    assert.ok(height > 5, `rot 180: preview height > 5 css px (got ${height})`);
+  }
+
+  view.fire.up(canvas, endScreen.clientX, endScreen.clientY);
+  await new Promise((r) => setTimeout(r, 10));
+
+  const committed = overlay.querySelectorAll(".annotate-highlight-annotation");
+  assert.equal(committed.length, 1, "rot 180: one committed highlight bar for the single line");
+  for (const bar of committed) {
+    const width = parseFloat(bar.style.width || "0");
+    const height = parseFloat(bar.style.height || "0");
+    assert.ok(width > 5, `rot 180: committed width > 5 css px (got ${width})`);
+    assert.ok(height > 5, `rot 180: committed height > 5 css px (got ${height})`);
+  }
+
+  const anns = (view.getAnnotations().p1 || []).filter((a) => a.type === "highlight");
+  assert.equal(anns.length, 1, "rot 180: one highlight annotation stored");
+  assert.ok(anns[0].width > 0 && anns[0].height > 0, "rot 180: stored highlight has positive size");
+
+  textLayerCache.clear();
+  view.destroy();
+});
+
+test("annotate-view smoke: a drag starting inside a text line never yields an empty snapped selection (rot 0/90/180/270)", async () => {
+  // Page-space reverse drag (right -> left) starting inside a single text line.
+  // This is empty at every rotation before the selectionRects fix, because the
+  // visual forward drag at rotation 180 (and any reverse drag elsewhere) maps
+  // to a reversed along-baseline order in page space.
+  const textLayer = {
+    lines: [
+      { dir: 0, from: 100, to: 200, baseline: 700, descent: 682.4, ascent: 770.4,
+        chars: [
+          { ch: "H", from: 100, to: 120 }, { ch: "e", from: 120, to: 140 },
+          { ch: "l", from: 140, to: 160 }, { ch: "l", from: 160, to: 180 },
+          { ch: "o", from: 180, to: 200 },
+        ] },
+    ],
+  };
+  for (const rotation of [0, 90, 180, 270]) {
+    textLayerCache.clear();
+    const page = { id: "p1", sourceId: "s1", index: 0, baseRotation: 0, rotated: rotation, width: PAGE_W, height: PAGE_H };
+    const view = await mountPointerView([page]);
+    textLayerCache.set("s1:0", textLayer);
+
+    const highlightBtn = [...view.container.querySelectorAll(".annotate-tool")].find((b) => b.dataset.tool === "highlight");
+    assert.ok(highlightBtn, `rot ${rotation}: highlight tool button`);
+    highlightBtn.dispatchEvent({ type: "click" });
+    await new Promise((r) => setTimeout(r, 10));
+
+    const block = pageBlock(rotation);
+    const canvas = view.canvas;
+
+    const startScreen = pageToScreenForBlock(190, 720, block, CANVAS_RECT);
+    const endScreen = pageToScreenForBlock(110, 720, block, CANVAS_RECT);
+
+    view.fire.down(canvas, startScreen.clientX, startScreen.clientY);
+    await new Promise((r) => setTimeout(r, 10));
+    view.fire.move(canvas, endScreen.clientX, endScreen.clientY);
+    await new Promise((r) => setTimeout(r, 10));
+    view.fire.up(canvas, endScreen.clientX, endScreen.clientY);
+    await new Promise((r) => setTimeout(r, 10));
+
+    const anns = (view.getAnnotations().p1 || []).filter((a) => a.type === "highlight");
+    assert.ok(anns.length >= 1, `rot ${rotation}: drag starting inside text must not yield an empty selection`);
+    for (const ann of anns) {
+      assert.ok(ann.width > 0 && ann.height > 0, `rot ${rotation}: bar must be non-empty`);
+    }
+
+    textLayerCache.clear();
+    view.destroy();
+  }
+});
+
+test("annotate-view smoke: Alt + highlight drag falls back to a free rectangle (one rect, one undo entry)", async () => {
+  const textLayer = {
+    lines: [
+      { dir: 0, from: 100, to: 200, baseline: 700, descent: 682.4, ascent: 770.4,
+        chars: [{ ch: "H", from: 100, to: 120 }, { ch: "e", from: 120, to: 140 }] },
+    ],
+  };
+  const pages = [{ id: "p1", sourceId: "s1", index: 0, baseRotation: 0, rotated: 0, width: PAGE_W, height: PAGE_H }];
+  const view = await mountPointerView(pages);
+
+  // A text layer exists, but Alt + pointerdown must force free-rect mode.
+  textLayerCache.set("s1:0", textLayer);
+
+  const highlightBtn = [...view.container.querySelectorAll(".annotate-tool")].find((b) => b.dataset.tool === "highlight");
+  assert.ok(highlightBtn, "highlight tool button");
+  highlightBtn.dispatchEvent({ type: "click" });
+  await new Promise((r) => setTimeout(r, 10));
+
+  const block = pageBlock(0);
+  const canvas = view.canvas;
+  const startScreen = pageToScreenForBlock(105, 720, block, CANVAS_RECT);
+  const endScreen = pageToScreenForBlock(300, 150, block, CANVAS_RECT);
+
+  view.fire.down(canvas, startScreen.clientX, startScreen.clientY, { altKey: true });
+  view.fire.move(canvas, endScreen.clientX, endScreen.clientY);
+  await new Promise((r) => setTimeout(r, 10));
+  view.fire.up(canvas, endScreen.clientX, endScreen.clientY);
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(view.updateCallCount(), 1, "exactly one update action for free-rect highlight");
+  const anns = (view.lastUpdatedAnns().p1 || []);
+  const highlights = anns.filter((a) => a.type === "highlight");
+  assert.equal(highlights.length, 1, "one free-rectangle highlight (not snapped to lines)");
+
+  const startPage = screenToPageForBlock(startScreen.clientX | 0, startScreen.clientY | 0, block, CANVAS_RECT);
+  const endPage = screenToPageForBlock(endScreen.clientX | 0, endScreen.clientY | 0, block, CANVAS_RECT);
+  assert.equal(highlights[0].x, Math.min(startPage.x, endPage.x), "free rect x");
+  assert.equal(highlights[0].y, Math.min(startPage.y, endPage.y), "free rect y");
+  assert.equal(highlights[0].width, Math.abs(startPage.x - endPage.x), "free rect width");
+  assert.equal(highlights[0].height, Math.abs(startPage.y - endPage.y), "free rect height");
+
+  textLayerCache.clear();
+  view.destroy();
+});
+
 test("annotate-view smoke: select-move of a highlight via real handlers (rot 0/90/180)", async () => {
   for (const rotation of [0, 90, 180]) {
     const pages = [{ id: "p1", sourceId: "s1", index: 0, baseRotation: 0, rotated: rotation, width: PAGE_W, height: PAGE_H }];
@@ -2457,4 +2708,180 @@ test("annotate-view: placing an image switches the tool to select and keeps the 
 
     view.destroy();
   }
+});
+
+// ---- Helpers: snapped highlight display at every rotation ----
+
+const PORTRAIT = { width: 612, height: 792 };
+const LANDSCAPE = { width: 792, height: 612 };
+
+// Three horizontal text lines in page space (origin bottom-left, y up).
+function threeLineLayer(pageH) {
+  const fontSize = 16;
+  const lines = [];
+  for (let i = 0; i < 3; i++) {
+    const baseline = pageH - 100 - i * 100;
+    const chars = [];
+    for (let ci = 0; ci < 5; ci++) {
+      const from = 100 + ci * 40;
+      chars.push({ ch: "ABCDE"[ci], from, to: from + 40 });
+    }
+    lines.push({
+      dir: 0, from: 100, to: 300, baseline,
+      descent: baseline - 0.22 * fontSize, ascent: baseline + 0.88 * fontSize,
+      chars,
+    });
+  }
+  return { lines };
+}
+
+function blockOf(page) {
+  const rot = ((page.baseRotation || 0) + (page.rotated || 0)) % 360;
+  const { visualW, visualH } = visualDims(page.width, page.height, rot);
+  return { pageW: page.width, pageH: page.height, visualW, visualH, rotation: rot };
+}
+
+function assertBarInsideCanvas(bar, cssW, cssH, label) {
+  const width = parseFloat(bar.style.width || "0");
+  const height = parseFloat(bar.style.height || "0");
+  const left = parseFloat(bar.style.left || "0");
+  const top = parseFloat(bar.style.top || "0");
+  assert.ok(width > 5, `${label}: width > 5 css px (got ${width})`);
+  assert.ok(height > 5, `${label}: height > 5 css px (got ${height})`);
+  assert.ok(left >= 0 && top >= 0, `${label}: inside page canvas (left/top >= 0)`);
+  assert.ok(left + width <= cssW, `${label}: inside page canvas horizontally`);
+  assert.ok(top + height <= cssH, `${label}: inside page canvas vertically`);
+}
+
+function setupRotatedPage(page, view) {
+  const canvas = view.canvas;
+  const cssW = parseFloat(canvas.style.width || "800");
+  const cssH = parseFloat(canvas.style.height || "600");
+  canvas.width = Math.round(cssW);
+  canvas.height = Math.round(cssH);
+  canvas._boundingRect = { left: 0, top: 0, width: cssW, height: cssH };
+  return { canvas, cssW, cssH, canvasRect: { left: 0, top: 0, width: cssW, height: cssH } };
+}
+
+test("annotate-view smoke: snapped highlight preview and committed bars are real-sized inside the canvas at rotations 0/90/180/270 (portrait and landscape, /Rotate and user rotation)", async () => {
+  const sizes = [PORTRAIT, LANDSCAPE];
+  const placements = ["rotated", "baseRotation"];
+
+  for (const size of sizes) {
+    for (const rotation of [0, 90, 180, 270]) {
+      for (const placement of placements) {
+        textLayerCache.clear();
+        const base = placement === "rotated" ? { baseRotation: 0, rotated: rotation } : { baseRotation: rotation, rotated: 0 };
+        const page = { id: "p1", sourceId: "s1", index: 0, width: size.width, height: size.height, ...base };
+        const view = await mountPointerView([page]);
+        textLayerCache.set("s1:0", threeLineLayer(page.height));
+
+        const highlightBtn = [...view.container.querySelectorAll(".annotate-tool")].find((b) => b.dataset.tool === "highlight");
+        assert.ok(highlightBtn, `rot ${rotation}: highlight tool button`);
+        highlightBtn.dispatchEvent({ type: "click" });
+        await new Promise((r) => setTimeout(r, 10));
+
+        const { canvas, cssW, cssH, canvasRect } = setupRotatedPage(page, view);
+        const block = blockOf(page);
+        const overlay = view.container.querySelector(".annotate-overlay");
+        assert.ok(overlay, "overlay exists");
+
+        // Drag from inside line 0 to past the last char of line 2; intermediate
+        // points land partly in gaps, so the drag exercises both snapping and
+        // the free-rectangle preview.
+        const startPage = { x: 110, y: page.height - 90 };
+        const endPage = { x: 290, y: page.height - 290 };
+        const startScreen = pageToScreenForBlock(startPage.x, startPage.y, block, canvasRect);
+        const endScreen = pageToScreenForBlock(endPage.x, endPage.y, block, canvasRect);
+
+        view.fire.down(canvas, startScreen.clientX, startScreen.clientY);
+        await new Promise((r) => setTimeout(r, 10));
+        for (const t of [0.25, 0.5, 0.75, 1]) {
+          const mx = startPage.x + (endPage.x - startPage.x) * t;
+          const my = startPage.y + (endPage.y - startPage.y) * t;
+          const ms = pageToScreenForBlock(mx, my, block, canvasRect);
+          view.fire.move(canvas, ms.clientX, ms.clientY);
+          for (const prev of overlay.querySelectorAll(".annotate-selection-preview, .annotate-highlight-preview")) {
+            assertBarInsideCanvas(prev, cssW, cssH, `preview rot=${rotation} ${placement} t=${t}`);
+          }
+        }
+        const previews = overlay.querySelectorAll(".annotate-selection-preview");
+        assert.equal(previews.length, 3, `rot ${rotation} ${placement}: preview bars equal the selected line count (3)`);
+        for (const prev of previews) assertBarInsideCanvas(prev, cssW, cssH, `final preview rot=${rotation} ${placement}`);
+
+        view.fire.up(canvas, endScreen.clientX, endScreen.clientY);
+        await new Promise((r) => setTimeout(r, 10));
+
+        const committed = overlay.querySelectorAll(".annotate-highlight-annotation");
+        assert.equal(committed.length, 3, `rot ${rotation} ${placement}: committed bars equal the selected line count (3)`);
+        for (const bar of committed) assertBarInsideCanvas(bar, cssW, cssH, `committed rot=${rotation} ${placement}`);
+
+        const anns = (view.getAnnotations().p1 || []).filter((a) => a.type === "highlight");
+        assert.equal(anns.length, 3, `rot ${rotation} ${placement}: one annotation per selected line`);
+        assert.equal(view.updateCallCount(), 1, `rot ${rotation} ${placement}: one undo entry for the whole drag`);
+
+        textLayerCache.clear();
+        view.destroy();
+      }
+    }
+  }
+});
+
+test("annotate-view smoke: highlight preview bars are removed from the DOM on pointerup and on Escape (rotations 0/90/180/270)", async () => {
+  for (const rotation of [0, 90, 180, 270]) {
+    textLayerCache.clear();
+    const page = { id: "p1", sourceId: "s1", index: 0, width: 612, height: 792, baseRotation: 0, rotated: rotation };
+    const view = await mountPointerView([page]);
+    textLayerCache.set("s1:0", threeLineLayer(page.height));
+
+    const highlightBtn = [...view.container.querySelectorAll(".annotate-tool")].find((b) => b.dataset.tool === "highlight");
+    assert.ok(highlightBtn, `rot ${rotation}: highlight tool button`);
+    highlightBtn.dispatchEvent({ type: "click" });
+    await new Promise((r) => setTimeout(r, 10));
+
+    const { canvas, cssW, cssH, canvasRect } = setupRotatedPage(page, view);
+    const block = blockOf(page);
+    const overlay = view.container.querySelector(".annotate-overlay");
+
+    const startPage = { x: 110, y: page.height - 90 };
+    const endPage = { x: 290, y: page.height - 290 };
+    const startScreen = pageToScreenForBlock(startPage.x, startPage.y, block, canvasRect);
+    const endScreen = pageToScreenForBlock(endPage.x, endPage.y, block, canvasRect);
+
+    const hasPreview = () => overlay.querySelectorAll(".annotate-selection-preview").length > 0
+      || overlay.querySelectorAll(".annotate-highlight-preview").length > 0;
+
+    // pointerdown -> drag -> pointerup: preview must be gone after pointerup.
+    view.fire.down(canvas, startScreen.clientX, startScreen.clientY);
+    await new Promise((r) => setTimeout(r, 10));
+    view.fire.move(canvas, endScreen.clientX, endScreen.clientY);
+    assert.ok(hasPreview(), `rot ${rotation}: preview present during drag`);
+    view.fire.up(canvas, endScreen.clientX, endScreen.clientY);
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(overlay.querySelectorAll(".annotate-selection-preview").length, 0, `rot ${rotation}: no selection preview left in DOM after pointerup`);
+    assert.equal(overlay.querySelectorAll(".annotate-highlight-preview").length, 0, `rot ${rotation}: no free-rect preview left in DOM after pointerup`);
+
+    // pointerdown -> drag -> Escape: preview must be gone after Escape.
+    view.fire.down(canvas, startScreen.clientX, startScreen.clientY);
+    view.fire.move(canvas, endScreen.clientX, endScreen.clientY);
+    assert.ok(hasPreview(), `rot ${rotation}: preview present before Escape`);
+    view.viewEl.dispatchEvent({ type: "keydown", key: "Escape", target: view.viewEl });
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(overlay.querySelectorAll(".annotate-selection-preview").length, 0, `rot ${rotation}: Escape removed the selection preview`);
+    assert.equal(overlay.querySelectorAll(".annotate-highlight-preview").length, 0, `rot ${rotation}: Escape removed the free-rect preview`);
+
+    textLayerCache.clear();
+    view.destroy();
+  }
+});
+
+test("static guard: no tmp-* or scratch-* files under tests/ or the repo root", () => {
+  const cwd = process.cwd();
+  const hits = [
+    ...globSync("tmp-*", { cwd }),
+    ...globSync("scratch-*", { cwd }),
+    ...globSync("tests/**/tmp-*", { cwd }),
+    ...globSync("tests/**/scratch-*", { cwd }),
+  ];
+  assert.equal(hits.length, 0, `unexpected scratch/tmp files: ${hits.join(", ")}`);
 });

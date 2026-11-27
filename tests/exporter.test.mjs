@@ -530,6 +530,38 @@ test("exportPages draws highlight annotations on unrotated page", async (t) => {
   assert.equal(rect.opacity, 0.4);
 });
 
+test("exportPages draws multiple highlight annotations as separate rectangles", async (t) => {
+  const PDFLib = makePDFLib();
+  const exporter = createExporter({ PDFLib });
+  const pages = [{ id: "p1", sourceId: "s1", index: 0, rotated: 0 }];
+  const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 1 }]]);
+  await exporter.exportPages({
+    pages, getSource: (id) => sources.get(id), fileName: "x",
+    exportMode: "all", selected: new Set(),
+    annotations: {
+      p1: [
+        { id: "h1", type: "highlight", x: 99.5, y: 681.9, width: 101, height: 89, color: "#ffe14d", opacity: 0.4 },
+        { id: "h2", type: "highlight", x: 99.5, y: 581.9, width: 41, height: 89, color: "#ffe14d", opacity: 0.4 },
+        { id: "h3", type: "highlight", x: 200, y: 500, width: 50, height: 30, color: "#ffe14d", opacity: 0.4 },
+      ],
+    },
+  });
+  const rects = drawnRects(PDFLib);
+  assert.equal(rects.length, 3, "one drawRectangle per highlight annotation");
+  assert.equal(rects[0].x, 99.5);
+  assert.equal(rects[0].y, 681.9);
+  assert.equal(rects[0].width, 101);
+  assert.equal(rects[0].height, 89);
+  assert.equal(rects[1].x, 99.5);
+  assert.equal(rects[1].y, 581.9);
+  assert.equal(rects[1].width, 41);
+  assert.equal(rects[1].height, 89);
+  assert.equal(rects[2].x, 200);
+  assert.equal(rects[2].y, 500);
+  assert.equal(rects[2].width, 50);
+  assert.equal(rects[2].height, 30);
+});
+
 test("exportPages draws highlight annotations with correct position on rotated page (90°)", async (t) => {
   const PDFLib = makePDFLib();
   const exporter = createExporter({ PDFLib });
