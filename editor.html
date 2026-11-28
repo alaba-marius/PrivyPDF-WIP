@@ -4,381 +4,431 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#ffffff" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: data:; font-src 'self'; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: data:; font-src 'self'; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'"
+    />
     <title>Editor · PrivyPDF</title>
-    <meta name="description" content="Organize PDF pages entirely in your browser: rotate, duplicate, extract and delete pages, with full undo. No uploads, ever." />
+    <meta
+      name="description"
+      content="Organize PDF pages entirely in your browser: rotate, duplicate, extract and delete pages, with full undo. No uploads, ever."
+    />
     <meta name="referrer" content="no-referrer" />
     <link rel="icon" href="/assets/privypdf-icon.png" type="image/png" />
-    <link rel="preload" href="/vendor/fonts/GoogleSansFlex-Variable.ttf" as="font" type="font/ttf" crossorigin />
+    <link
+      rel="preload"
+      href="/vendor/fonts/GoogleSansFlex-Variable.ttf"
+      as="font"
+      type="font/ttf"
+      crossorigin
+    />
     <link rel="stylesheet" href="/css/theme.css" />
     <link rel="stylesheet" href="/css/editor.css" />
     <script type="module" src="/js/editor.js"></script>
   </head>
   <body>
-    <div class="app">
-      <header class="top-bar ds-app-topbar" id="top-bar">
-        <div class="top-left">
-          <a class="logo-mark" href="/" aria-label="PrivyPDF home"><i data-icon="file-text"></i></a>
-          <div class="wordmark"><span>Privy</span><strong>PDF</strong></div>
-        </div>
-        <div class="top-centre">
-          <div class="file-name" id="file-name">Annual-report.pdf</div>
-          <span class="ds-badge-dark" aria-hidden="true"><span class="ds-badge-dot" aria-hidden="true"></span>On this device only</span>
-        </div>
-        <div class="top-right">
-          <button class="ds-btn ds-btn--sm ds-btn--outline" id="add-files" aria-label="Add files"><i data-icon="plus"></i><span>Add files</span></button>
-          <button class="ds-icon-btn" id="btn-undo" aria-label="Undo"><i data-icon="undo"></i></button>
-          <button class="ds-icon-btn" id="btn-redo" aria-label="Redo"><i data-icon="redo"></i></button>
-          <button class="ds-btn ds-btn--sm ds-btn--primary btn-download" id="btn-download" aria-label="Download"><i data-icon="download"></i><span>Download</span></button>
-          <button class="ds-btn ds-btn--sm ds-btn--ghost top-details" id="top-details" aria-label="Details" aria-expanded="false" aria-controls="right-panel"><i data-icon="chevron"></i><span>Details</span></button>
-        </div>
-      </header>
-      <div class="app-body">
-        <nav class="rail ds-rail" id="rail">
-          <button class="ds-rail-item ds-rail-item--active" id="rail-pages" aria-current="true" data-tool="pages"><i data-icon="layers"></i><span>Pages</span></button>
-          <button class="ds-rail-item" data-tool="merge" id="rail-merge" aria-label="Add PDFs to merge"><i data-icon="file-plus"></i><span>Merge</span></button>
-          <button class="ds-rail-item" data-tool="images" id="rail-images" aria-label="Add image files"><i data-icon="upload"></i><span>Add files</span></button>
-          <button class="ds-rail-item" data-tool="extract" id="rail-extract" aria-label="Extract selected pages"><i data-icon="scissors"></i><span>Extract</span></button>
-          <div class="rail-divider" aria-hidden="true"></div>
-          <button class="ds-rail-item" data-tool="annotate" id="rail-annotate" aria-label="Annotate pages"><i data-icon="pen"></i><span>Annotate</span></button>
-          <button class="ds-rail-item ds-rail-item--soon" disabled data-tool="text"><i data-icon="type"></i><span>Text</span><span class="rail-soon">Soon</span></button>
-          <button class="ds-rail-item ds-rail-item--soon" disabled data-tool="sign"><i data-icon="signature"></i><span>Sign</span><span class="rail-soon">Soon</span></button>
-          <button class="ds-rail-item ds-rail-item--soon" disabled data-tool="protect"><i data-icon="lock"></i><span>Protect</span><span class="rail-soon">Soon</span></button>
-        </nav>
-        <main class="workarea" id="workarea">
-          <div class="sub-toolbar" id="sub-toolbar">
-            <div class="sub-left">
-              <span class="sub-title">Pages</span>
-              <span class="sub-status" id="sub-status" aria-live="polite">No document</span>
-            </div>
-            <div class="sub-right">
-              <button class="ds-btn ds-btn--sm ds-btn--outline" id="select-all">Select all</button>
-              <div class="size-wrap ds-segmented" id="size-wrap">
-                <button class="ds-segment" id="size-large">Large</button>
-                <button class="ds-segment" id="size-small">Small</button>
-              </div>
-            </div>
-          </div>
-          <div class="grid-wrap" id="grid-wrap">
-            <div class="empty" id="empty-state">
-              <div class="ds-dropzone empty-drop" id="empty-drop" role="button" tabindex="0" aria-label="Drop PDFs or images to begin, or click to choose files">
-                <div class="ds-stack ds-stack--sm ds-stack--center">
-                  <div class="empty-icon"><i data-icon="file-plus"></i></div>
-                  <div class="empty-title">Drop PDFs or images to begin</div>
-                </div>
-                <div class="empty-sub">or click to choose files · PDF, JPG, PNG and WebP</div>
-                <span class="ds-badge-light">Processed on this device only</span>
-              </div>
-            </div>
-            <div class="page-grid ds-sheet-grid" id="page-grid" role="listbox" aria-multiselectable="true">
-              <button class="add-tile" id="add-tile" aria-label="Add more files"><i data-icon="plus"></i><span>Add tile</span><span>or click to choose</span></button>
-            </div>
-            <div class="loading" id="loading-state" hidden>
-              <div class="skeleton-grid" id="skeleton-grid"></div>
-            </div>
-            <div class="drag-overlay" id="drag-overlay">
-              <div class="drag-text ds-sr-only">Drop files to add them</div>
-            </div>
-          </div>
-          <div class="float-bar ds-floatbar" id="float-bar" role="toolbar" aria-label="Selected pages" hidden>
-            <span class="ds-floatbar-label" id="float-label">0 selected</span>
-            <button class="ds-floatbar-btn" id="float-rotate" aria-label="Rotate selected pages"><i data-icon="rotate-cw"></i><span>Rotate</span></button>
-            <button class="ds-floatbar-btn" id="float-duplicate" aria-label="Duplicate selected pages"><i data-icon="copy"></i><span>Duplicate</span></button>
-            <button class="ds-floatbar-btn" id="float-extract" aria-label="Extract selected pages"><i data-icon="scissors"></i><span>Extract</span></button>
-            <button class="ds-floatbar-btn ds-floatbar-btn--danger" id="float-delete" aria-label="Delete selected pages"><i data-icon="trash"></i><span>Delete</span></button>
-          </div>
-
-          <!-- In-page Annotate view (replaces modal) -->
-          <div class="annotate-view-container" id="annotate-view-container"></div>
-        </main>
-        <aside class="right-panel ds-panel" id="right-panel">
-          <!-- Annotate section (shown only in annotate mode) -->
-          <div class="ds-stack ds-stack--sm panel-section ds-panel-section annotate-panel-section" id="annotate-panel-section" hidden>
-            <span class="panel-label ds-panel-label">Annotate</span>
-            <p class="annotate-hint" id="annotate-panel-hint">Click to add text, drag to highlight</p>
-            <div class="ds-stack ds-stack--sm annotate-options">
-              <!-- Highlight options -->
-              <div class="annotate-highlight-options" id="annotate-highlight-options">
-                <div class="ds-form-field">
-                  <label class="ds-field-label" for="annotate-highlight-colors">Highlight color</label>
-                  <div class="ds-color-swatch-group annotate-highlight-colors" id="annotate-highlight-colors" role="group" aria-label="Highlight color">
-                    <button class="ds-color-swatch" data-color="#ffe14d" aria-checked="true"></button>
-                    <button class="ds-color-swatch" data-color="#ffcccc"></button>
-                    <button class="ds-color-swatch" data-color="#ccffcc"></button>
-                    <button class="ds-color-swatch" data-color="#ccccff"></button>
-                    <button class="ds-color-swatch" data-color="#ffffcc"></button>
-                    <button class="ds-color-swatch" data-color="#ffccff"></button>
-                    <button class="ds-color-swatch" data-color="#ccffff"></button>
-                  </div>
-                </div>
-                <div class="ds-form-field">
-                  <label class="ds-field-label" for="annotate-opacity">Opacity</label>
-                  <input class="ds-input" id="annotate-opacity" type="range" min="0" max="100" value="40" />
-                </div>
-              </div>
-              <!-- Text options -->
-              <div class="annotate-text-options" id="annotate-text-options" hidden>
-                <div class="ds-form-field">
-                  <label class="ds-field-label" for="annotate-font-size">Text size</label>
-                  <select class="ds-select annotate-font-size" id="annotate-font-size"></select>
-                </div>
-                <div class="ds-form-field">
-                  <label class="ds-field-label" for="annotate-text-colors">Text color</label>
-                  <div class="ds-color-swatch-group annotate-text-colors" id="annotate-text-colors" role="group" aria-label="Text color">
-                    <button class="ds-color-swatch" data-color="#000000" aria-checked="true"></button>
-                    <button class="ds-color-swatch" data-color="#ffffff"></button>
-                    <button class="ds-color-swatch" data-color="#ff0000"></button>
-                    <button class="ds-color-swatch" data-color="#0066ff"></button>
-                    <button class="ds-color-swatch" data-color="#00aa00"></button>
-                    <button class="ds-color-swatch" data-color="#ff8800"></button>
-                    <button class="ds-color-swatch" data-color="#aa00aa"></button>
-                    <button class="ds-color-swatch" data-color="#00aaaa"></button>
-                  </div>
-                </div>
-              </div>
-              <!-- Image options -->
-              <div class="annotate-image-options" id="annotate-image-options" hidden>
-                <p class="annotate-image-hint" id="annotate-image-hint">Insert image: choose an image to place on the page.</p>
-                <div class="ds-form-field">
-                  <label class="ds-field-label" for="annotate-image-opacity">Opacity</label>
-                  <input class="ds-input" id="annotate-image-opacity" type="range" min="5" max="100" value="100" />
-                </div>
-                <div class="ds-form-field">
-                  <label class="ds-field-label" for="annotate-image-keep-proportions">Keep proportions</label>
-                  <input id="annotate-image-keep-proportions" type="checkbox" checked />
-                </div>
-                <div class="ds-stack ds-stack--sm annotate-image-actions">
-                  <button class="ds-btn ds-btn--sm" id="annotate-image-choose">Choose image</button>
-                  <button class="ds-btn ds-btn--sm ds-btn--ghost" id="annotate-image-replace">Replace image</button>
-                  <button class="ds-btn ds-btn--sm ds-btn--ghost" id="annotate-image-delete">Delete</button>
-                </div>
-              </div>
-            </div>
-            <button class="ds-btn ds-btn--sm ds-btn--ghost annotate-delete-btn" id="annotate-panel-delete" hidden>Delete</button>
-            <div class="annotate-annotation-list" id="annotate-annotation-list" aria-label="Annotations on this page"></div>
-          </div>
-
-          <div class="ds-stack ds-stack--sm panel-section ds-panel-section">
-            <label for="doc-name" class="panel-label ds-panel-label">Document</label>
-            <div class="file-field">
-              <input class="ds-input" id="doc-name" type="text" />
-              <span class="file-suffix">.pdf</span>
-            </div>
-            <div class="ds-stat-group">
-              <div class="ds-stat-row"><span>Pages</span><span class="ds-stat-value" id="stat-pages">—</span></div>
-              <div class="ds-stat-row"><span>Source files</span><span class="ds-stat-value" id="stat-source">—</span></div>
-              <div class="ds-stat-row"><span>Original size</span><span class="ds-stat-value" id="stat-size">—</span></div>
-            </div>
-            <div class="source-files" id="source-files"></div>
-          </div>
-          <div class="ds-stack ds-stack--sm panel-section ds-panel-section">
-            <span class="panel-label ds-panel-label">Export</span>
-            <div class="ds-segmented">
-              <button class="ds-segment" id="export-all">All pages</button>
-              <button class="ds-segment" id="export-selected">Selected (0)</button>
-            </div>
-            <div class="ds-stack ds-stack--sm export-actions">
-              <button class="ds-btn ds-btn--primary" id="download-pdf"><i data-icon="download"></i><span>Download PDF</span></button>
-              <p class="export-caption">Built in this tab. Nothing is uploaded.</p>
-            </div>
-          </div>
-          <div class="ds-stack ds-stack--sm panel-section ds-panel-section">
-            <span class="panel-label ds-panel-label">Options</span>
-
-            <div class="ds-disclosure" id="disclosure-page-numbers">
-              <button class="ds-disclosure-trigger" id="trigger-page-numbers" aria-expanded="false"><span>Page numbers</span><i class="ds-icon" data-icon="chevron-down" aria-hidden="true"></i></button>
-              <div class="ds-disclosure-content" id="content-page-numbers" hidden>
-                <div class="ds-form-field">
-                  <label class="ds-field-label" for="page-number-mode">Apply to</label>
-                  <select class="ds-select" id="page-number-mode">
-                    <option value="none">None</option>
-                    <option value="all">All pages</option>
-                    <option value="selected">Selected pages</option>
-                  </select>
-                </div>
-                <div class="ds-form-field">
-                  <label class="ds-field-label" for="page-number-format">Format</label>
-                  <select class="ds-select" id="page-number-format">
-                    <option value="n">{n}</option>
-                    <option value="page-n">Page {n}</option>
-                    <option value="n-of-total">{n} / {total}</option>
-                    <option value="page-of-total">Page {n} of {total}</option>
-                  </select>
-                </div>
-                <div class="ds-form-field">
-                  <label class="ds-field-label" for="page-number-position">Position</label>
-                  <select class="ds-select" id="page-number-position">
-                    <option value="top-left">Top left</option>
-                    <option value="top-center">Top center</option>
-                    <option value="top-right">Top right</option>
-                    <option value="bottom-left">Bottom left</option>
-                    <option value="bottom-center" selected>Bottom center</option>
-                    <option value="bottom-right">Bottom right</option>
-                  </select>
-                </div>
-                <div class="ds-field-row">
-                  <label class="ds-field-label" for="page-number-start">Start number</label>
-                  <input class="ds-input" id="page-number-start" type="number" min="1" value="1" />
-                </div>
-                <div class="ds-field-row">
-                  <label class="ds-field-label" for="page-number-font-size">Font size</label>
-                  <input class="ds-input" id="page-number-font-size" type="number" min="6" max="36" value="10" />
-                </div>
-                <div class="ds-field-row">
-                  <label class="ds-field-label" for="page-number-margin">Margin</label>
-                  <input class="ds-input" id="page-number-margin" type="number" min="8" max="72" value="36" />
-                </div>
-                <div class="ds-form-field">
-                  <label class="ds-field-label" for="page-number-apply-to">Apply to</label>
-                  <select class="ds-select" id="page-number-apply-to">
-                    <option value="all">All pages</option>
-                    <option value="selected">Selected pages</option>
-                  </select>
-                </div>
-                <div class="ds-field-row">
-                  <label class="ds-field-label" for="page-number-skip-first">Skip first page</label>
-                  <button class="ds-switch" id="page-number-skip-first" role="switch" aria-checked="false"></button>
-                </div>
-              </div>
-            </div>
-
-            <div class="ds-disclosure" id="disclosure-watermark">
-              <button class="ds-disclosure-trigger" id="trigger-watermark" aria-expanded="false"><span>Watermark</span><i class="ds-icon" data-icon="chevron-down" aria-hidden="true"></i></button>
-              <div class="ds-disclosure-content" id="content-watermark" hidden>
-                <div class="ds-field-row">
-                  <label class="ds-field-label" for="watermark-enabled">Add watermark</label>
-                  <button class="ds-switch" id="watermark-enabled" role="switch" aria-checked="false"></button>
-                </div>
-                <div class="ds-form-field">
-                  <label class="ds-field-label" for="watermark-text">Text</label>
-                  <input class="ds-input" id="watermark-text" type="text" maxlength="60" placeholder="CONFIDENTIAL" />
-                  <p class="ds-field-error" id="watermark-error" hidden></p>
-                  <p class="ds-field-hint">Up to 60 characters: letters, digits and common punctuation.</p>
-                </div>
-                <div class="ds-field-row">
-                  <label class="ds-field-label">Color</label>
-                  <div class="ds-color-swatch-group" role="group" aria-label="Watermark color">
-                    <button class="ds-color-swatch" data-color="gray" aria-checked="true"></button>
-                    <button class="ds-color-swatch" data-color="black"></button>
-                    <button class="ds-color-swatch" data-color="red"></button>
-                    <button class="ds-color-swatch" data-color="blue"></button>
-                    <button class="ds-color-swatch" data-color="green"></button>
-                  </div>
-                </div>
-                <div class="ds-field-row">
-                  <label class="ds-field-label" for="watermark-angle">Angle</label>
-                  <select class="ds-select" id="watermark-angle">
-                    <option value="0">0°</option>
-                    <option value="45">45°</option>
-                    <option value="90">90°</option>
-                  </select>
-                  <p class="ds-field-hint">Relative to the visual page.</p>
-                </div>
-                <div class="ds-field-row">
-                  <label class="ds-field-label" for="watermark-opacity">Opacity</label>
-                  <input class="ds-input" id="watermark-opacity" type="range" min="0" max="100" value="30" />
-                </div>
-                <div class="ds-form-field">
-                  <label class="ds-field-label" for="watermark-size-mode">Size</label>
-                  <select class="ds-select" id="watermark-size-mode">
-                    <option value="auto">Auto (fit to page)</option>
-                    <option value="fixed">Fixed</option>
-                  </select>
-                </div>
-                <div class="ds-form-field" id="watermark-fixed-size-field" hidden>
-                  <label class="ds-field-label" for="watermark-fixed-size">Font size</label>
-                  <input class="ds-input" id="watermark-fixed-size" type="number" min="6" max="200" value="72" />
-                </div>
-              </div>
-            </div>
-
-            <div class="ds-disclosure" id="disclosure-metadata">
-              <button class="ds-disclosure-trigger" id="trigger-metadata" aria-expanded="false"><span>Metadata</span><i class="ds-icon" data-icon="chevron-down" aria-hidden="true"></i></button>
-              <div class="ds-disclosure-content" id="content-metadata" hidden>
-                <div class="ds-form-field">
-                  <label class="ds-field-label" for="meta-title">Title</label>
-                  <input class="ds-input" id="meta-title" type="text" maxlength="200" placeholder="Untitled" />
-                  <p class="ds-field-hint">Prefilled from the file when there is one source.</p>
-                </div>
-                <div class="ds-form-field">
-                  <label class="ds-field-label" for="meta-author">Author</label>
-                  <input class="ds-input" id="meta-author" type="text" maxlength="200" />
-                </div>
-                <div class="ds-form-field">
-                  <label class="ds-field-label" for="meta-subject">Subject</label>
-                  <input class="ds-input" id="meta-subject" type="text" maxlength="200" />
-                </div>
-                <div class="ds-form-field">
-                  <label class="ds-field-label" for="meta-keywords">Keywords</label>
-                  <input class="ds-input" id="meta-keywords" type="text" maxlength="200" />
-                  <p class="ds-field-hint">Comma-separated keywords.</p>
-                </div>
-                <div class="ds-field-row">
-                  <button class="ds-btn ds-btn--sm ds-btn--ghost" id="meta-clear">Clear fields</button>
-                </div>
-              </div>
-            </div>
-
-            <div class="ds-disclosure" id="disclosure-split">
-              <button class="ds-disclosure-trigger" id="trigger-split" aria-expanded="false"><span>Split PDF</span><i class="ds-icon" data-icon="chevron-down" aria-hidden="true"></i></button>
-              <div class="ds-disclosure-content" id="content-split" hidden>
-                <div class="ds-form-field">
-                  <label class="ds-field-label" for="split-mode">Split by</label>
-                  <select class="ds-select" id="split-mode">
-                    <option value="every">Every N pages</option>
-                    <option value="onePerPage">One file per page</option>
-                    <option value="custom">Custom ranges</option>
-                  </select>
-                </div>
-                <div class="ds-field-row">
-                  <label class="ds-field-label" for="split-every">Pages per part</label>
-                  <input class="ds-input" id="split-every" type="number" min="1" value="1" />
-                </div>
-                <div class="ds-form-field">
-                  <label class="ds-field-label" for="split-ranges">Custom ranges</label>
-                  <input class="ds-input" id="split-ranges" type="text" placeholder="1-3, 5, 8-end" />
-                  <p class="ds-field-hint">Ranges are 1-based, for example "1-3, 5, 8-10". "end" means the last page.</p>
-                  <p class="ds-field-error" id="split-ranges-error" hidden></p>
-                </div>
-                <p class="split-summary" id="split-summary" hidden></p>
-              </div>
-            </div>
-
-            <div class="ds-stack ds-stack--sm export-actions">
-              <button class="ds-btn ds-btn--primary" id="btn-preview">Preview</button>
-              <button class="ds-btn ds-btn--outline" id="btn-split">Split into ZIP</button>
-            </div>
-          </div>
-          <div class="ds-stack ds-stack--sm panel-section ds-panel-section">
-            <div class="ds-card">
-              <div class="privacy-header">
-              <i class="ds-icon" data-icon="shield-check" aria-hidden="true"></i>
-              <div>
-                <span class="privacy-text"><span id="privacy-count">0</span> requests to other servers since you opened this file</span>
-                <p class="privacy-fine">Files held in memory only. Nothing is sent to other servers.</p>
-                <p class="privacy-fine">Pages are rendered by pdf.js and exported by pdf-lib, both served from this site.</p>
-              </div>
-            </div>
-            <a class="privacy-link" href="/privacy.html#verify">How to verify</a>
-            </div>
-          </div>
-          <div class="panel-section ds-panel-section">
-            <span class="panel-label ds-panel-label">Shortcuts</span>
-            <div class="shortcut-row"><span>Select range</span><span class="shortcut-keys"><span class="ds-kbd">Shift</span>+ click</span></div>
-            <div class="shortcut-row"><span>Toggle page</span><span class="shortcut-keys"><span class="ds-kbd">Ctrl</span>+ click</span></div>
-            <div class="shortcut-row"><span>Rotate</span><span class="shortcut-keys"><span class="ds-kbd">R</span></span></div>
-            <div class="shortcut-row"><span>Delete</span><span class="shortcut-keys"><span class="ds-kbd">Del</span></span></div>
-            <div class="shortcut-row"><span>Undo</span><span class="shortcut-keys"><span class="ds-kbd">Ctrl</span> <span class="ds-kbd">Z</span></span></div>
-          </div>
-        </aside>
-        <dialog class="ds-modal" id="preview-dialog">
-          <div class="ds-modal-content">
-            <canvas id="preview-canvas"></canvas>
-            <button class="ds-icon-btn" id="preview-close" aria-label="Close preview"><i data-icon="x" aria-hidden="true"></i></button>
-          </div>
-        </dialog>
-        <div class="drawer-scrim" id="drawer-scrim" hidden></div>
+  <div class="app">
+    <header class="top-bar ds-app-topbar" id="top-bar">
+      <div class="top-left">
+        <a class="logo-mark" href="/" aria-label="PrivyPDF home"><i data-icon="file-text"></i></a>
+        <div class="wordmark"><span>Privy</span><strong>PDF</strong></div>
+  </div>
+      <div class="top-centre">
+        <div class="file-name" id="file-name">Annual-report.pdf</div>
+        <span class="ds-badge-dark" aria-hidden="true"><span class="ds-badge-dot" aria-hidden="true"></span>On this device only</span>
+</div>
+      <div class="top-right">
+        <button class="ds-btn ds-btn--sm ds-btn--outline" id="add-files" aria-label="Add files"><i data-icon="plus"></i><span>Add files</span></button>
+        <button class="ds-icon-btn" id="btn-undo" aria-label="Undo"><i data-icon="undo"></i></button>
+        <button class="ds-icon-btn" id="btn-redo" aria-label="Redo"><i data-icon="redo"></i></button>
+        <button class="ds-btn ds-btn--sm ds-btn--primary btn-download" id="btn-download"
+          aria-label="Download"><i data-icon="download"></i><span>Download</span></button>
+        <button
+          class="ds-btn ds-btn--sm ds-btn--ghost top-details"
+          id="top-details"
+          aria-label="Details"
+          aria-expanded="false"
+          aria-controls="right-panel"><i data-icon="chevron"></i><span>Details</span></button>
       </div>
+</header>
+    <div class="app-body">
+      <nav class="rail ds-rail" id="rail">
+        <button class="ds-rail-item ds-rail-item--active" id="rail-pages" aria-current="true"
+          data-tool="pages"><i data-icon="layers"></i><span>Pages</span></button>
+        <button class="ds-rail-item" data-tool="merge" id="rail-merge" aria-label="Add PDFs to merge"><i data-icon="file-plus"></i><span>Merge</span></button>
+        <button class="ds-rail-item" data-tool="images" id="rail-images" aria-label="Add image files"><i data-icon="upload"></i><span>Add files</span></button>
+        <button class="ds-rail-item" data-tool="extract" id="rail-extract"
+          aria-label="Extract selected pages"><i data-icon="scissors"></i><span>Extract</span></button>
+        <div class="rail-divider" aria-hidden="true"></div>
+        <button class="ds-rail-item" data-tool="annotate" id="rail-annotate" aria-label="Annotate pages"><i data-icon="pen"></i><span>Annotate</span></button>
+        <button class="ds-rail-item ds-rail-item--soon" disabled data-tool="text">
+          <i data-icon="type"></i><span>Text</span><span class="rail-soon">Soon</span>
+        </button>
+        <button class="ds-rail-item ds-rail-item--soon" disabled data-tool="sign">
+          <i data-icon="signature"></i><span>Sign</span><span class="rail-soon">Soon</span>
+        </button>
+        <button class="ds-rail-item ds-rail-item--soon" disabled data-tool="protect">
+          <i data-icon="lock"></i><span>Protect</span><span class="rail-soon">Soon</span>
+        </button>
+      </nav>
+      <main class="workarea" id="workarea">
+        <div class="sub-toolbar" id="sub-toolbar">
+          <div class="sub-left">
+          <span class="sub-title">Pages</span>
+          <span class="sub-status" id="sub-status" aria-live="polite">No document</span>
+          </div>
+          <div class="sub-right">
+          <button class="ds-btn ds-btn--sm ds-btn--outline" id="select-all">Select all</button>
+            <div class="size-wrap ds-segmented" id="size-wrap">
+          <button class="ds-segment" id="size-large">Large</button>
+          <button class="ds-segment" id="size-small">Small</button>
+            </div>
+          </div>
+        </div>
+        <div class="grid-wrap" id="grid-wrap">
+          <div class="empty" id="empty-state">
+            <div
+            class="ds-dropzone empty-drop"
+            id="empty-drop"
+            role="button"
+            tabindex="0"
+            aria-label="Drop PDFs or images to begin, or click to choose files"
+            >
+          <div class="ds-stack ds-stack--sm ds-stack--center">
+          <div class="empty-icon"><i data-icon="file-plus"></i></div>
+          <div class="empty-title">Drop PDFs or images to begin</div>
     </div>
+          <div class="empty-sub">or click to choose files · PDF, JPG, PNG and WebP</div>
+          <span class="ds-badge-light">Processed on this device only</span>
+</div>
+</div>
+  <div class="page-grid ds-sheet-grid" id="page-grid" role="listbox" aria-multiselectable="true">
+            <button class="add-tile" id="add-tile" aria-label="Add more files">
+            <i data-icon="plus"></i><span>Add tile</span><span>or click to choose</span>
+            </button>
+  </div>
+          <div class="loading" id="loading-state" hidden>
+            <div class="skeleton-grid" id="skeleton-grid"></div>
+</div>
+          <div class="drag-overlay" id="drag-overlay">
+            <div class="drag-text ds-sr-only">Drop files to add them</div>
+</div>
+</div>
+  <div class="float-bar ds-floatbar" id="float-bar" role="toolbar" aria-label="Selected pages" hidden>
+          <span class="ds-floatbar-label" id="float-label">0 selected</span>
+          <button class="ds-floatbar-btn" id="float-rotate" aria-label="Rotate selected pages"><i data-icon="rotate-cw"></i><span>Rotate</span></button>
+          <button class="ds-floatbar-btn" id="float-duplicate" aria-label="Duplicate selected pages"><i data-icon="copy"></i><span>Duplicate</span></button>
+          <button class="ds-floatbar-btn" id="float-extract" aria-label="Extract selected pages"><i data-icon="scissors"></i><span>Extract</span></button>
+    <button class="ds-floatbar-btn ds-floatbar-btn--danger" id="float-delete"
+      aria-label="Delete selected pages"><i data-icon="trash"></i><span>Delete</span></button>
+  </div>
+  <!-- In-page Annotate view (replaces modal) -->
+        <div class="annotate-view-container" id="annotate-view-container"></div>
+</main>
+      <aside class="right-panel ds-panel" id="right-panel">
+        <!-- Annotate section (shown only in annotate mode) -->
+        <div class="ds-stack ds-stack--sm panel-section ds-panel-section annotate-panel-section" id="annotate-panel-section" hidden>
+          <span id="annotate-aria-live" aria-live="polite" class="ds-sr-only"></span>
+          <div class="annotate-group annotate-group-markup" id="annotate-group-markup" hidden>
+          <span class="panel-label ds-panel-label annotate-group-label">Markup</span>
+          <div class="ds-form-field">
+          <div class="ds-segmented annotate-markup-style-group" id="annotate-markup-style" role="radiogroup" aria-label="Markup style">
+          <button
+          type="button"
+          class="ds-segment annotate-markup-segment"
+          data-style="highlight"
+          aria-checked="true"
+          role="radio"
+          aria-label="Highlight"
+          title="Highlight"><i data-icon="highlighter"></i></button>
+          <button
+          type="button"
+          class="ds-segment annotate-markup-segment"
+          data-style="underline"
+          aria-checked="false"
+          role="radio"
+          aria-label="Underline"
+          title="Underline"><i data-icon="underline"></i></button>
+          <button
+          type="button"
+          class="ds-segment annotate-markup-segment"
+          data-style="strikethrough"
+          aria-checked="false"
+          role="radio"
+          aria-label="Strikethrough"
+          title="Strikethrough"><i data-icon="strikethrough"></i></button>
+          </div>
+          </div>
+          <div class="ds-form-field">
+          <div class="annotate-markup-colors" id="annotate-markup-colors" role="group" aria-label="Markup color"></div>
+</div>
+  <div class="ds-form-field annotate-thickness-field" id="annotate-thickness-field" hidden>
+    <label class="ds-field-label ds-sr-only" for="annotate-thickness">Thickness</label>
+    <input class="ds-input" id="annotate-thickness" type="range" min="0.5" max="8" step="0.5" value="1.5" />
+  </div>
+  <div class="ds-form-field annotate-opacity-field" id="annotate-opacity-field" hidden>
+    <label class="ds-field-label ds-sr-only" for="annotate-opacity">Opacity</label>
+    <input class="ds-input" id="annotate-opacity" type="range" min="0" max="100" value="40" />
+  </div>
+</div>
+  <div class="annotate-group annotate-group-text" id="annotate-group-text" hidden>
+    <span class="panel-label ds-panel-label annotate-group-label">Text</span>
+    <div id="annotate-text-controls"></div>
+</div>
+  <div class="annotate-group annotate-group-image" id="annotate-image-options" hidden>
+    <span class="panel-label ds-panel-label annotate-group-label">Image</span>
+    <div class="ds-form-field">
+      <label class="ds-field-label ds-sr-only" for="annotate-image-opacity">Opacity</label>
+      <input class="ds-input" id="annotate-image-opacity" type="range" min="5" max="100" value="100" />
+    </div>
+    <div class="ds-form-field">
+      <label class="ds-field-label ds-sr-only" for="annotate-image-keep-proportions">Keep proportions</label>
+      <input id="annotate-image-keep-proportions" type="checkbox" checked />
+    </div>
+    <div class="ds-stack ds-stack--sm annotate-image-actions">
+      <button class="ds-btn ds-btn--sm" id="annotate-image-choose">Choose image</button>
+      <button class="ds-btn ds-btn--sm ds-btn--ghost" id="annotate-image-replace">Replace image</button>
+      <button class="ds-btn ds-btn--sm ds-btn--ghost" id="annotate-image-delete">Delete</button>
+    </div>
+  </div>
+  <p class="annotate-empty" id="annotate-empty" hidden>Select a mark to edit it</p>
+  <button class="ds-btn ds-btn--sm ds-btn--ghost annotate-delete-btn" id="annotate-panel-delete" hidden>Delete</button>
+  <div class="annotate-annotation-list" id="annotate-annotation-list" aria-label="Annotations on this page"></div>
+</div>
+        <div class="ds-stack ds-stack--sm panel-section ds-panel-section">
+          <label for="doc-name" class="panel-label ds-panel-label">Document</label>
+          <div class="file-field">
+          <input class="ds-input" id="doc-name" type="text" />
+          <span class="file-suffix">.pdf</span>
+          </div>
+          <div class="ds-stat-group">
+          <div class="ds-stat-row"><span>Pages</span><span class="ds-stat-value" id="stat-pages">—</span></div>
+  <div class="ds-stat-row"><span>Source files</span><span class="ds-stat-value" id="stat-source">—</span></div>
+  <div class="ds-stat-row"><span>Original size</span><span class="ds-stat-value" id="stat-size">—</span></div>
+</div>
+  <div class="source-files" id="source-files"></div>
+</div>
+        <div class="ds-stack ds-stack--sm panel-section ds-panel-section">
+          <span class="panel-label ds-panel-label">Export</span>
+          <div class="ds-segmented">
+          <button class="ds-segment" id="export-all">All pages</button>
+          <button class="ds-segment" id="export-selected">Selected (0)</button>
+          </div>
+          <div class="ds-stack ds-stack--sm export-actions">
+          <button class="ds-btn ds-btn--primary" id="download-pdf"><i data-icon="download"></i><span>Download PDF</span></button>
+          <p class="export-caption">Built in this tab. Nothing is uploaded.</p>
+          </div>
+        </div>
+        <div class="ds-stack ds-stack--sm panel-section ds-panel-section">
+          <span class="panel-label ds-panel-label">Options</span>
+          <div class="ds-disclosure" id="disclosure-page-numbers">
+          <button class="ds-disclosure-trigger" id="trigger-page-numbers" aria-expanded="false">
+          <span>Page numbers</span><i class="ds-icon" data-icon="chevron-down" aria-hidden="true"></i>
+          </button>
+          <div class="ds-disclosure-content" id="content-page-numbers" hidden>
+          <div class="ds-form-field">
+          <label class="ds-field-label" for="page-number-mode">Apply to</label>
+          <select class="ds-select" id="page-number-mode">
+          <option value="none">None</option>
+          <option value="all">All pages</option>
+          <option value="selected">Selected pages</option>
+          </select>
+          </div>
+          <div class="ds-form-field">
+          <label class="ds-field-label" for="page-number-format">Format</label>
+          <select class="ds-select" id="page-number-format">
+          <option value="n">{n}</option>
+          <option value="page-n">Page {n}</option>
+          <option value="n-of-total">{n} / {total}</option>
+          <option value="page-of-total">Page {n} of {total}</option>
+          </select>
+          </div>
+          <div class="ds-form-field">
+          <label class="ds-field-label" for="page-number-position">Position</label>
+          <select class="ds-select" id="page-number-position">
+          <option value="top-left">Top left</option>
+          <option value="top-center">Top center</option>
+          <option value="top-right">Top right</option>
+          <option value="bottom-left">Bottom left</option>
+          <option value="bottom-center" selected>Bottom center</option>
+          <option value="bottom-right">Bottom right</option>
+          </select>
+          </div>
+          <div class="ds-field-row">
+          <label class="ds-field-label" for="page-number-start">Start number</label>
+          <input class="ds-input" id="page-number-start" type="number" min="1" value="1" />
+          </div>
+          <div class="ds-field-row">
+          <label class="ds-field-label" for="page-number-font-size">Font size</label>
+          <input class="ds-input" id="page-number-font-size" type="number" min="6" max="36" value="10" />
+          </div>
+          <div class="ds-field-row">
+          <label class="ds-field-label" for="page-number-margin">Margin</label>
+          <input class="ds-input" id="page-number-margin" type="number" min="8" max="72" value="36" />
+          </div>
+          <div class="ds-form-field">
+          <label class="ds-field-label" for="page-number-apply-to">Apply to</label>
+          <select class="ds-select" id="page-number-apply-to">
+          <option value="all">All pages</option>
+          <option value="selected">Selected pages</option>
+          </select>
+          </div>
+          <div class="ds-field-row">
+          <label class="ds-field-label" for="page-number-skip-first">Skip first page</label>
+          <button class="ds-switch" id="page-number-skip-first" role="switch" aria-checked="false"></button>
+          </div>
+          </div>
+          </div>
+          <div class="ds-disclosure" id="disclosure-watermark">
+          <button class="ds-disclosure-trigger" id="trigger-watermark" aria-expanded="false">
+          <span>Watermark</span><i class="ds-icon" data-icon="chevron-down" aria-hidden="true"></i>
+          </button>
+          <div class="ds-disclosure-content" id="content-watermark" hidden>
+          <div class="ds-field-row">
+          <label class="ds-field-label" for="watermark-enabled">Add watermark</label>
+          <button class="ds-switch" id="watermark-enabled" role="switch" aria-checked="false"></button>
+          </div>
+          <div class="ds-form-field">
+          <label class="ds-field-label" for="watermark-text">Text</label>
+          <input class="ds-input" id="watermark-text" type="text" maxlength="60" placeholder="CONFIDENTIAL" />
+          <p class="ds-field-error" id="watermark-error" hidden></p>
+          <p class="ds-field-hint">Up to 60 characters: letters, digits and common punctuation.</p>
+          </div>
+          <div class="ds-field-row">
+          <label class="ds-field-label">Color</label>
+          <div class="ds-color-swatch-group" role="group" aria-label="Watermark color">
+          <button class="ds-color-swatch" data-color="gray" aria-checked="true"></button>
+          <button class="ds-color-swatch" data-color="black"></button>
+          <button class="ds-color-swatch" data-color="red"></button>
+          <button class="ds-color-swatch" data-color="blue"></button>
+          <button class="ds-color-swatch" data-color="green"></button>
+          </div>
+          </div>
+          <div class="ds-field-row">
+          <label class="ds-field-label" for="watermark-angle">Angle</label>
+          <select class="ds-select" id="watermark-angle">
+          <option value="0">0°</option>
+          <option value="45">45°</option>
+          <option value="90">90°</option>
+          </select>
+          <p class="ds-field-hint">Relative to the visual page.</p>
+          </div>
+          <div class="ds-field-row">
+          <label class="ds-field-label" for="watermark-opacity">Opacity</label>
+          <input class="ds-input" id="watermark-opacity" type="range" min="0" max="100" value="30" />
+          </div>
+          <div class="ds-form-field">
+          <label class="ds-field-label" for="watermark-size-mode">Size</label>
+          <select class="ds-select" id="watermark-size-mode">
+          <option value="auto">Auto (fit to page)</option>
+          <option value="fixed">Fixed</option>
+          </select>
+          </div>
+          <div class="ds-form-field" id="watermark-fixed-size-field" hidden>
+          <label class="ds-field-label" for="watermark-fixed-size">Font size</label>
+          <input class="ds-input" id="watermark-fixed-size" type="number" min="6" max="200" value="72" />
+          </div>
+          </div>
+          </div>
+          <div class="ds-disclosure" id="disclosure-metadata">
+          <button class="ds-disclosure-trigger" id="trigger-metadata" aria-expanded="false">
+          <span>Metadata</span><i class="ds-icon" data-icon="chevron-down" aria-hidden="true"></i>
+          </button>
+          <div class="ds-disclosure-content" id="content-metadata" hidden>
+          <div class="ds-form-field">
+          <label class="ds-field-label" for="meta-title">Title</label>
+          <input class="ds-input" id="meta-title" type="text" maxlength="200" placeholder="Untitled" />
+          <p class="ds-field-hint">Prefilled from the file when there is one source.</p>
+          </div>
+          <div class="ds-form-field">
+          <label class="ds-field-label" for="meta-author">Author</label>
+          <input class="ds-input" id="meta-author" type="text" maxlength="200" />
+          </div>
+          <div class="ds-form-field">
+          <label class="ds-field-label" for="meta-subject">Subject</label>
+          <input class="ds-input" id="meta-subject" type="text" maxlength="200" />
+          </div>
+          <div class="ds-form-field">
+          <label class="ds-field-label" for="meta-keywords">Keywords</label>
+          <input class="ds-input" id="meta-keywords" type="text" maxlength="200" />
+          <p class="ds-field-hint">Comma-separated keywords.</p>
+          </div>
+          <div class="ds-field-row">
+          <button class="ds-btn ds-btn--sm ds-btn--ghost" id="meta-clear">Clear fields</button>
+          </div>
+          </div>
+          </div>
+          <div class="ds-disclosure" id="disclosure-split">
+          <button class="ds-disclosure-trigger" id="trigger-split" aria-expanded="false">
+          <span>Split PDF</span><i class="ds-icon" data-icon="chevron-down" aria-hidden="true"></i>
+          </button>
+          <div class="ds-disclosure-content" id="content-split" hidden>
+          <div class="ds-form-field">
+          <label class="ds-field-label" for="split-mode">Split by</label>
+          <select class="ds-select" id="split-mode">
+          <option value="every">Every N pages</option>
+          <option value="onePerPage">One file per page</option>
+          <option value="custom">Custom ranges</option>
+          </select>
+          </div>
+          <div class="ds-field-row">
+          <label class="ds-field-label" for="split-every">Pages per part</label>
+          <input class="ds-input" id="split-every" type="number" min="1" value="1" />
+          </div>
+          <div class="ds-form-field">
+          <label class="ds-field-label" for="split-ranges">Custom ranges</label>
+          <input class="ds-input" id="split-ranges" type="text" placeholder="1-3, 5, 8-end" />
+          <p class="ds-field-hint">Ranges are 1-based, for example "1-3, 5, 8-10". "end" means the last page.</p>
+          <p class="ds-field-error" id="split-ranges-error" hidden></p>
+          </div>
+          <p class="split-summary" id="split-summary" hidden></p>
+          </div>
+          </div>
+          <div class="ds-stack ds-stack--sm export-actions">
+          <button class="ds-btn ds-btn--primary" id="btn-preview">Preview</button>
+          <button class="ds-btn ds-btn--outline" id="btn-split">Split into ZIP</button>
+          </div>
+        </div>
+        <div class="ds-stack ds-stack--sm panel-section ds-panel-section">
+          <div class="ds-card">
+          <div class="privacy-header">
+          <i class="ds-icon" data-icon="shield-check" aria-hidden="true"></i>
+          <div>
+          <span class="privacy-text"><span id="privacy-count">0</span> requests to other servers since you opened this file</span>
+          <p class="privacy-fine">Files held in memory only. Nothing is sent to other servers.</p>
+          <p class="privacy-fine">Pages are rendered by pdf.js and exported by pdf-lib, both served from this site.</p>
+          </div>
+          </div>
+          <a class="privacy-link" href="/privacy.html#verify">How to verify</a>
+          </div>
+        </div>
+  <div class="panel-section ds-panel-section">
+    <span class="panel-label ds-panel-label">Shortcuts</span>
+    <div class="shortcut-row">
+      <span>Select range</span><span class="shortcut-keys"><span class="ds-kbd">Shift</span>+ click</span>
+    </div>
+    <div class="shortcut-row">
+      <span>Toggle page</span><span class="shortcut-keys"><span class="ds-kbd">Ctrl</span>+ click</span>
+    </div>
+    <div class="shortcut-row">
+      <span>Rotate</span><span class="shortcut-keys"><span class="ds-kbd">R</span></span>
+    </div>
+    <div class="shortcut-row">
+      <span>Delete</span><span class="shortcut-keys"><span class="ds-kbd">Del</span></span>
+    </div>
+    <div class="shortcut-row">
+      <span>Undo</span><span class="shortcut-keys"><span class="ds-kbd">Ctrl</span><span class="ds-kbd">Z</span></span>
+    </div>
+  </div>
+</aside>
+      <dialog class="ds-modal" id="preview-dialog">
+        <div class="ds-modal-content">
+          <canvas id="preview-canvas"></canvas>
+          <button class="ds-icon-btn" id="preview-close" aria-label="Close preview"><i data-icon="x" aria-hidden="true"></i></button>
+        </div>
+      </dialog>
+      <div class="drawer-scrim" id="drawer-scrim" hidden></div>
+</div>
+</div>
   </body>
 </html>

@@ -23,12 +23,22 @@ import {
   DEFAULT_HIGHLIGHT_COLOR,
   DEFAULT_HIGHLIGHT_OPACITY,
   DEFAULT_IMAGE_OPACITY,
+  DEFAULT_MARKUP_STYLE,
+  DEFAULT_MARKUP_THICKNESS,
+  DEFAULT_MARKUP_UNDERLINE_COLOR,
+  DEFAULT_MARKUP_UNDERLINE_OPACITY,
+  DEFAULT_MARKUP_STRIKETHROUGH_COLOR,
+  DEFAULT_MARKUP_STRIKETHROUGH_OPACITY,
+  MARKUP_THICKNESS_MIN,
+  MARKUP_THICKNESS_MAX,
   toJSON,
   fromJSON,
   clear,
   annotationDefaultsFromState,
   panelControlValues,
+  markupLineRect,
 } from "../js/core/annotations.js";
+import { freeMarkDir } from "../js/core/annotate-geometry.js";
 import { commitTextDraft } from "../js/core/annotation-commit.js";
 
 test("annotations: basic CRUD operations", () => {
@@ -57,7 +67,7 @@ test("annotations: basic CRUD operations", () => {
   assert.equal(addedHigh.width, 200);
   assert.equal(addedHigh.height, 100);
   assert.equal(addedHigh.color, "#ffe14d");
-  assert.equal(addedHigh.opacity, 0.4);
+  assert.equal(addedHigh.opacity, 0.7);
 
   // Get page annotations
   const pageAnns = getPageAnnotations(annotations, "p1");
@@ -237,7 +247,7 @@ test("annotations: constants exported", () => {
   assert.equal(DEFAULT_TEXT_FONT_SIZE, 14);
   assert.equal(DEFAULT_TEXT_COLOR, "#000000");
   assert.equal(DEFAULT_HIGHLIGHT_COLOR, "#ffe14d");
-  assert.equal(DEFAULT_HIGHLIGHT_OPACITY, 0.4);
+  assert.equal(DEFAULT_HIGHLIGHT_OPACITY, 0.7);
 });
 
 test("annotations: createTextAnnotation and createHighlightAnnotation with custom options", () => {
@@ -513,6 +523,204 @@ test("panelControlValues: undefined selection returns store defaults", () => {
   assert.equal(values.textColor, "#111111");
 });
 
+// --- Markup style tests ---
+
+test("markupLineRect: highlight returns the box itself at dir 0", () => {
+  const ann = { type: "highlight", style: "highlight", x: 100, y: 200, width: 300, height: 50, dir: 0 };
+  const rect = markupLineRect(ann);
+  assert.deepStrictEqual(rect, { x: 100, y: 200, width: 300, height: 50 });
+});
+
+test("markupLineRect: underline at dir 0 sits 11% above box bottom", () => {
+  const ann = { type: "highlight", style: "underline", x: 100, y: 200, width: 300, height: 50, dir: 0, thickness: 2 };
+  const rect = markupLineRect(ann);
+  // edge = 200 + 0.11 * 50 = 205.5; bandBottom = 205.5 - 2 = 203.5
+  assert.deepStrictEqual(rect, { x: 100, y: 203.5, width: 300, height: 2 });
+});
+
+test("markupLineRect: strikethrough at dir 0 centered at 45% of height", () => {
+  const ann = { type: "highlight", style: "strikethrough", x: 100, y: 200, width: 300, height: 50, dir: 0, thickness: 2 };
+  const rect = markupLineRect(ann);
+  // edge = 200 + 0.45 * 50 = 222.5; bandStart = 222.5 - 1 = 221.5
+  assert.deepStrictEqual(rect, { x: 100, y: 221.5, width: 300, height: 2 });
+});
+
+test("markupLineRect: underline at dir 90 runs vertically", () => {
+  const ann = { type: "highlight", style: "underline", x: 100, y: 200, width: 300, height: 50, dir: 90, thickness: 2 };
+  const rect = markupLineRect(ann);
+  // dir 90: right=+y, down=+x. Visual bottom = right edge (x=400). Fraction line
+  // 11% above visual bottom (anti-down = -x): 400 - 0.11*300 = 367. Band runs
+  // down (+x) by thickness 2: x=367, width=2, full height 50.
+  assert.deepStrictEqual(rect, { x: 367, y: 200, width: 2, height: 50 });
+});
+
+test("markupLineRect: underline at dir 180 runs horizontally", () => {
+  const ann = { type: "highlight", style: "underline", x: 100, y: 200, width: 300, height: 50, dir: 180, thickness: 2 };
+  const rect = markupLineRect(ann);
+  // dir 180: right=-x, down=+y. Visual bottom = top edge (y=250). Fraction line
+  // 11% above visual bottom (anti-down = -y): 250 - 0.11*50 = 244.5. Band runs
+  // down (+y) by thickness 2: y=244.5, width=300, height=2.
+  assert.deepStrictEqual(rect, { x: 100, y: 244.5, width: 300, height: 2 });
+});
+
+test("markupLineRect: underline at dir 270 runs vertically", () => {
+  const ann = { type: "highlight", style: "underline", x: 100, y: 200, width: 300, height: 50, dir: 270, thickness: 2 };
+  const rect = markupLineRect(ann);
+  // dir 270: right=-y, down=-x. Visual bottom = left edge (x=100). Fraction line
+  // 11% above visual bottom (anti-down = +x): 100 + 0.11*300 = 133. Band runs
+  // down (-x) by thickness 2: x=131, width=2, full height 50.
+  assert.deepStrictEqual(rect, { x: 131, y: 200, width: 2, height: 50 });
+});
+
+test("markupLineRect: thickness clamped to [0.5, 8]", () => {
+  const thin = markupLineRect({ type: "highlight", style: "underline", x: 0, y: 0, width: 100, height: 20, dir: 0, thickness: 0.1 });
+  assert.equal(thin.height, MARKUP_THICKNESS_MIN);
+  const thick = markupLineRect({ type: "highlight", style: "underline", x: 0, y: 0, width: 100, height: 20, dir: 0, thickness: 99 });
+  assert.equal(thick.height, MARKUP_THICKNESS_MAX);
+});
+
+test("markupLineRect: highlight ignores thickness", () => {
+  const ann = { type: "highlight", style: "highlight", x: 10, y: 20, width: 100, height: 50, dir: 0, thickness: 99 };
+  const rect = markupLineRect(ann);
+  assert.deepStrictEqual(rect, { x: 10, y: 20, width: 100, height: 50 });
+});
+
+// --- Oracle: markupLineRect vs the (right, down) unit-vector table ---
+
+// Independent re-derivation of the band rect from the (right, down) table, so
+// the test does not simply restate the implementation.
+function expectedMarkupLineRect(ann) {
+  const style = ann.style || "highlight";
+  if (style === "highlight") {
+    return { x: ann.x || 0, y: ann.y || 0, width: ann.width || 0, height: ann.height || 0 };
+  }
+  const dirs = {
+    0:   { right: { x: 1, y: 0 }, down: { x: 0, y: -1 } },
+    90:  { right: { x: 0, y: 1 }, down: { x: 1, y: 0 } },
+    180: { right: { x: -1, y: 0 }, down: { x: 0, y: 1 } },
+    270: { right: { x: 0, y: -1 }, down: { x: -1, y: 0 } },
+  };
+  const dir = ((ann.dir || 0) % 360 + 360) % 360;
+  const vec = dirs[dir];
+  const thickness = Math.min(8, Math.max(0.5, ann.thickness ?? 1.5));
+  const fraction = style === "underline" ? 0.11 : 0.45;
+  const x0 = ann.x || 0, y0 = ann.y || 0;
+  const x1 = x0 + (ann.width || 0), y1 = y0 + (ann.height || 0);
+  const thickAxis = Math.abs(vec.down.x) ? "x" : "y";
+  const thickSign = vec.down[thickAxis];
+  const lenAxis = thickAxis === "x" ? "y" : "x";
+  const thickMin = thickAxis === "x" ? x0 : y0;
+  const thickMax = thickAxis === "x" ? x1 : y1;
+  const thickBottom = thickSign === 1 ? thickMax : thickMin;
+  const fractionLine = thickBottom - fraction * (thickMax - thickMin) * thickSign;
+  const thickOrigin = style === "strikethrough"
+    ? fractionLine - thickness / 2
+    : (thickSign === 1 ? fractionLine : fractionLine - thickness);
+  let x, y, width, height;
+  if (lenAxis === "x") {
+    x = x0; width = x1 - x0; y = thickOrigin; height = thickness;
+  } else {
+    x = thickOrigin; width = thickness; y = y0; height = y1 - y0;
+  }
+  return { x, y, width, height };
+}
+
+test("markupLineRect: matches (right, down) table for all dirs, both styles", () => {
+  const ann = { type: "highlight", x: 100, y: 200, width: 300, height: 50, thickness: 2 };
+  for (const dir of [0, 90, 180, 270]) {
+    for (const style of ["underline", "strikethrough"]) {
+      const actual = markupLineRect({ ...ann, dir, style });
+      const expected = expectedMarkupLineRect({ ...ann, dir, style });
+      assert.deepStrictEqual(actual, expected, `dir ${dir} style ${style}`);
+    }
+  }
+});
+
+test("markupLineRect: underline band sits at the text-bottom edge for all rotations", () => {
+  const cases = [
+    { dir: 0, width: 300, height: 50 },
+    { dir: 90, width: 300, height: 50 },
+    { dir: 180, width: 300, height: 50 },
+    { dir: 270, width: 300, height: 50 },
+  ];
+  for (const c of cases) {
+    const ann = { type: "highlight", style: "underline", x: 100, y: 200, ...c, thickness: 2 };
+    const rect = markupLineRect(ann);
+    const expected = expectedMarkupLineRect(ann);
+    assert.deepStrictEqual(rect, expected);
+    // Band thickness is exactly the requested thickness on the down axis.
+    const thickAxis = [90, 270].includes(c.dir) ? "width" : "height";
+    assert.equal(rect[thickAxis], 2);
+    // Band spans the full extent on the length axis.
+    const lenAxis = thickAxis === "width" ? "height" : "width";
+    assert.equal(rect[lenAxis], c.dir === 0 || c.dir === 180 ? 300 : 50);
+  }
+});
+
+test("markupLineRect: strikethrough band is centered at 45% for all dirs", () => {
+  const ann = { type: "highlight", style: "strikethrough", x: 100, y: 200, width: 300, height: 50, thickness: 4 };
+  for (const dir of [0, 90, 180, 270]) {
+    const actual = markupLineRect({ ...ann, dir });
+    const expected = expectedMarkupLineRect({ ...ann, dir });
+    assert.deepStrictEqual(actual, expected, `dir ${dir}`);
+  }
+});
+
+test("panelControlValues: markupStyle and markupThickness from store defaults", () => {
+  const state = {
+    annotateFontSize: 12,
+    annotateTextColor: "#000000",
+    annotateHighlightColor: "#ffe14d",
+    annotateHighlightOpacity: 0.4,
+    annotateMarkupStyle: "underline",
+    annotateMarkupUnderlineThickness: 3,
+  };
+  const values = panelControlValues(state, null);
+  assert.equal(values.markupStyle, "underline");
+  assert.equal(values.markupThickness, 3);
+});
+
+test("panelControlValues: markupThickness undefined for highlight style", () => {
+  const state = {
+    annotateFontSize: 12,
+    annotateTextColor: "#000000",
+    annotateHighlightColor: "#ffe14d",
+    annotateHighlightOpacity: 0.4,
+    annotateMarkupStyle: "highlight",
+  };
+  const values = panelControlValues(state, null);
+  assert.equal(values.markupStyle, "highlight");
+  assert.equal(values.markupThickness, undefined);
+});
+
+test("panelControlValues: selected underline annotation uses its own thickness", () => {
+  const state = {
+    annotateFontSize: 12,
+    annotateTextColor: "#000000",
+    annotateHighlightColor: "#ffe14d",
+    annotateHighlightOpacity: 0.4,
+    annotateMarkupStyle: "strikethrough",
+    annotateMarkupStrikethroughThickness: 2,
+  };
+  const selected = { id: "u1", type: "highlight", style: "underline", thickness: 6 };
+  const values = panelControlValues(state, selected);
+  assert.equal(values.markupStyle, "underline");
+  assert.equal(values.markupThickness, 6);
+});
+
+test("panelControlValues: markupStyle from selected highlight annotation", () => {
+  const state = {
+    annotateFontSize: 12,
+    annotateTextColor: "#000000",
+    annotateHighlightColor: "#ffe14d",
+    annotateHighlightOpacity: 0.4,
+    annotateMarkupStyle: "highlight",
+  };
+  const selected = { id: "s1", type: "highlight", style: "strikethrough" };
+  const values = panelControlValues(state, selected);
+  assert.equal(values.markupStyle, "strikethrough");
+});
+
 // --- Image annotation tests ---
 
 test("DEFAULT_IMAGE_OPACITY is 1", () => {
@@ -595,4 +803,53 @@ test("annotations: add/move/delete image annotation round trip", () => {
 
   annotations = deleteAnnotation(annotations, "p1", anns[0].id);
   assert.equal(getPageAnnotations(annotations, "p1").length, 0);
+});
+
+// --- freeMarkDir oracle tests ---
+
+test("freeMarkDir: direction equals effective rotation (visual rightward -> page space)", () => {
+  assert.equal(freeMarkDir(0), 0);
+  assert.equal(freeMarkDir(90), 90);
+  assert.equal(freeMarkDir(180), 180);
+  assert.equal(freeMarkDir(270), 270);
+});
+
+test("freeMarkDir: normalizes out-of-range rotations", () => {
+  assert.equal(freeMarkDir(360), 0);
+  assert.equal(freeMarkDir(-90), 270);
+  assert.equal(freeMarkDir(450), 90);
+});
+
+test("freeMarkDir: underline at rotation 90 runs vertically so its length follows visual rightward", () => {
+  const ann = {
+    type: "highlight",
+    style: "underline",
+    x: 100,
+    y: 200,
+    width: 300,
+    height: 50,
+    dir: freeMarkDir(90),
+    thickness: 2,
+  };
+  const rect = markupLineRect(ann);
+  // dir 90 -> length along page y (vertical band), thickness along page x
+  assert.equal(rect.width, 2);
+  assert.equal(rect.height, 50);
+});
+
+test("freeMarkDir: underline at rotation 0 runs horizontally along the visual bottom edge", () => {
+  const ann = {
+    type: "highlight",
+    style: "underline",
+    x: 100,
+    y: 200,
+    width: 300,
+    height: 50,
+    dir: freeMarkDir(0),
+    thickness: 2,
+  };
+  const rect = markupLineRect(ann);
+  // dir 0 -> length along page x (horizontal band)
+  assert.equal(rect.width, 300);
+  assert.equal(rect.height, 2);
 });

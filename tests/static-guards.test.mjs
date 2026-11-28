@@ -576,7 +576,7 @@ test("static guard: annotate-view.js bare function calls", () => {
     "translateX", "translateY", "translate", "rotate", "scale", "skewX", "skewY",
     "rgba", "rgb", "hsl", "hsla", "url",
     // HTML/template content that looks like calls
-    "Select", "Highlight", "Text", "image",
+    "Select", "Highlight", "Markup", "Text", "image",
   ]);
 
   // Parameters from opts that are used as functions
@@ -780,5 +780,34 @@ test("static guard: every annotate state key read by panel.js is written in js/"
     unwritten.length,
     0,
     `These annotate state keys are read by panel.js but never written in js/: ${unwritten.join(", ")}`,
+  );
+});
+
+// Guard 9: only exporter.js calls pdf-lib page draw methods (drawText,
+// drawRectangle, drawImage) on output pages. Canvas 2D contexts (ctx.drawImage)
+// are not covered by this guard — they render thumbnails/previews, not exported
+// pages. Any other file calling pdf-lib page draw methods risks drawing at the
+// raw MediaBox corner instead of the visible-box origin (CropBox ∩ MediaBox lower-left).
+test("static guard: pdf-lib page draw methods are only called in exporter.js", () => {
+  const allJsFiles = collectJsFiles(JS_ROOT);
+  // Receiver of the draw call; canvas contexts are named ctx/context/gc/c/g.
+  const drawRegex = /\b([A-Za-z_$][\w$]*)\.draw(?:Text|Rectangle|Image)\s*\(/g;
+  const canvasReceivers = new Set(["ctx", "context", "gc", "g", "c", "dc", "ctx2d"]);
+  const offenders = [];
+  for (const file of allJsFiles) {
+    const code = readFileSync(file, "utf8");
+    let match;
+    while ((match = drawRegex.exec(code))) {
+      if (canvasReceivers.has(match[1])) continue;
+      const relative = file.slice(ROOT.length + 1).replace(/\\/g, "/");
+      if (relative !== "js/core/exporter.js") {
+        offenders.push(`${relative}:${code.slice(0, match.index).split("\n").length}`);
+      }
+    }
+  }
+  assert.equal(
+    offenders.length,
+    0,
+    `pdf-lib page draw methods called outside exporter.js:\n${offenders.join("\n")}`,
   );
 });

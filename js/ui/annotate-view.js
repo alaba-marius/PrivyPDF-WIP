@@ -15,6 +15,7 @@ import {
   pageToVisual,
   visualDims,
 } from "../core/annotate-layout.js";
+import { freeMarkDir } from "../core/annotate-geometry.js";
 import { commitTextDraft } from "../core/annotation-commit.js";
 import {
   addAnnotation,
@@ -31,8 +32,10 @@ import {
   DEFAULT_HIGHLIGHT_COLOR,
   DEFAULT_HIGHLIGHT_OPACITY,
   DEFAULT_IMAGE_OPACITY,
+  DEFAULT_MARKUP_STYLE,
   validateTextForHelvetica,
   annotationDefaultsFromState,
+  markupLineRect,
 } from "../core/annotations.js";
 import { textLayerCache, hitTestText, selectionRects } from "../core/text-layer.js";
 
@@ -67,7 +70,7 @@ const ANNOTATE_VIEW_HTML = `
   <div class="annotate-tool-palette" id="annotate-tool-palette" role="toolbar" aria-label="Annotation tools">
     <button class="annotate-palette-btn annotate-tool" data-tool="select" aria-pressed="true" title="Select (V)"><i data-icon="mouse-pointer-2"></i></button>
     <button class="annotate-palette-btn annotate-tool" data-tool="text" aria-pressed="false" title="Text (T)"><i data-icon="type"></i></button>
-    <button class="annotate-palette-btn annotate-tool" data-tool="highlight" aria-pressed="false" title="Highlight (H)"><i data-icon="highlighter"></i></button>
+    <button class="annotate-palette-btn annotate-tool" data-tool="highlight" aria-pressed="false" title="Markup (H)" aria-label="Markup (H)"><i data-icon="highlighter"></i></button>
     <button class="annotate-palette-btn annotate-tool" data-tool="image" aria-pressed="false" title="Insert image (I)"><i data-icon="image"></i></button>
   </div>
 
@@ -108,9 +111,13 @@ export function mountAnnotateView(root, opts = {}) {
   let highlightStart = { x: 0, y: 0 };
   let highlightPageId = null;
   // Text snapping state for the highlight tool: while true, the current drag
-  // snaps to digital text and produces one highlight bar per text line.
+  // snaps to digital text and produces one markup bar per text line.
   let highlightSnapping = false;
   let highlightStartPos = null; // { lineIndex, charIndex, side }
+  let highlightStartDir = 0; // baseline direction (page space) of the snapped line
+  // Active markup style ("highlight" | "underline" | "strikethrough"), read from
+  // the store so the panel and view stay in sync.
+  let currentMarkupStyle = DEFAULT_MARKUP_STYLE;
   // Image annotation drag/resize state
   let isDraggingImage = false;
   let isResizingImage = false;
@@ -776,24 +783,50 @@ export function mountAnnotateView(root, opts = {}) {
   }
 
   function renderHighlightAnnotation(ann, page, rotation, visualWidth, visualHeight, overlay) {
-    // Highlight is a rectangle in page space: x, y, width, height (origin bottom-left).
-    // Same page-rect→screen-rect function as the preview (screenRectForHighlight),
-    // so committed bars and preview bars are placed and sized identically.
-    const screen = screenRectForHighlight(ann.x, ann.y, ann.width, ann.height, page, rotation, visualWidth, visualHeight);
-    if (!screen) return;
+    const style = ann.style || DEFAULT_MARKUP_STYLE;
+    const drawRect = markupLineRect(ann);
+    const state = getState();
+    const defaults = annotationDefaultsFromState(state, "highlight", style);
+
+    // Outer element = the full annotation box: the hit target, so the mark can
+    // be selected by clicking anywhere in its line box at every rotation.
+    const boxScreen = screenRectForHighlight(ann.x, ann.y, ann.width, ann.height, page, rotation, visualWidth, visualHeight);
+    if (!boxScreen) return;
 
     const el = document.createElement("div");
     el.className = `annotate-highlight-annotation${ann.id === selectedAnnotationId ? " selected" : ""}`;
     el.dataset.annotationId = ann.id;
-    el.style.left = `${screen.left}px`;
-    el.style.top = `${screen.top}px`;
-    el.style.width = `${screen.width}px`;
-    el.style.height = `${screen.height}px`;
-    el.style.background = ann.color || DEFAULT_HIGHLIGHT_COLOR;
-    el.style.opacity = ann.opacity ?? DEFAULT_HIGHLIGHT_OPACITY;
+    el.style.left = `${boxScreen.left}px`;
+    el.style.top = `${boxScreen.top}px`;
+    el.style.width = `${boxScreen.width}px`;
+    el.style.height = `${boxScreen.height}px`;
+    el.style.background = "transparent";
     el.tabIndex = -1;
     el.setAttribute("role", "button");
-    el.setAttribute("aria-label", `Highlight annotation`);
+    el.setAttribute("aria-label", `${style.charAt(0).toUpperCase() + style.slice(1)} annotation`);
+
+    // Inner element = the drawn band (the whole box for highlight, a thin line
+    // for underline/strikethrough), positioned inside the full hit-target box.
+    const band = document.createElement("div");
+    band.className = "annotate-highlight-band";
+    const bandScreen = screenRectForHighlight(drawRect.x, drawRect.y, drawRect.width, drawRect.height, page, rotation, visualWidth, visualHeight);
+    if (bandScreen) {
+      band.style.position = "absolute";
+      band.style.left = `${bandScreen.left - boxScreen.left}px`;
+      band.style.top = `${bandScreen.top - boxScreen.top}px`;
+      band.style.width = `${bandScreen.width}px`;
+      band.style.height = `${bandScreen.height}px`;
+    }
+    band.style.background = ann.color ?? defaults.color;
+    band.style.opacity = ann.opacity ?? defaults.opacity;
+    if (style === "highlight") {
+      band.style.left = "0";
+      band.style.top = "0";
+      band.style.width = "100%";
+      band.style.height = "100%";
+    } else {
+      band.style.borderRadius = "0";
+    }
 
     el.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -819,19 +852,21 @@ export function mountAnnotateView(root, opts = {}) {
       }
     });
 
+    el.appendChild(band);
     overlay.appendChild(el);
   }
 
   function renderHighlightPreview(pageId, page, rotation, visualWidth, visualHeight, overlay) {
     const state = getState();
-    const highlightDefaults = annotationDefaultsFromState(state, "highlight");
+    const style = state.annotateMarkupStyle ?? DEFAULT_MARKUP_STYLE;
+    const markupDefaults = annotationDefaultsFromState(state, "highlight", style);
 
     // Clear any previous preview of either kind
     for (const sel of [".annotate-highlight-preview", ".annotate-selection-preview"]) {
       for (const el of overlay.querySelectorAll(sel)) el.remove();
     }
 
-    // Text snapping: render one preview bar per text line covered by the drag.
+    // Text snapping: render one preview band per text line covered by the drag.
     if (highlightSnapping && highlightStartPos) {
       const layer = textLayerForPage(page);
       const endPos = layer ? hitTestText(layer, dragAnnotationStart) : null;
@@ -851,7 +886,18 @@ export function mountAnnotateView(root, opts = {}) {
         };
         const bounds = { left: 0, top: 0, width: visualWidth, height: visualHeight };
         for (const rect of rects) {
-          const screen = pageRectToScreen(rect.x, rect.y, rect.width, rect.height, block, bounds);
+          // Draw the style band (not the full line box) so the preview matches
+          // what gets committed.
+          const drawRect = markupLineRect({
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            style,
+            thickness: markupDefaults.thickness,
+            dir: highlightStartDir,
+          });
+          const screen = pageRectToScreen(drawRect.x, drawRect.y, drawRect.width, drawRect.height, block, bounds);
           if (!screen) continue;
           const el = document.createElement("div");
           el.className = "annotate-selection-preview";
@@ -859,8 +905,9 @@ export function mountAnnotateView(root, opts = {}) {
           el.style.top = `${screen.top}px`;
           el.style.width = `${screen.width}px`;
           el.style.height = `${screen.height}px`;
-          el.style.background = highlightDefaults.color;
-          el.style.opacity = highlightDefaults.opacity;
+          el.style.background = markupDefaults.color;
+          el.style.opacity = markupDefaults.opacity;
+          if (style !== "highlight") el.style.borderRadius = "0";
           el.style.pointerEvents = "none";
           overlay.appendChild(el);
         }
@@ -882,7 +929,16 @@ export function mountAnnotateView(root, opts = {}) {
 
     // Free-rectangle preview — same page-rect→screen-rect mapping as the
     // snapped bars and committed annotations.
-    const screen = screenRectForHighlight(x, y, width, height, page, rotation, visualWidth, visualHeight);
+    const drawRect = markupLineRect({
+      x,
+      y,
+      width,
+      height,
+      style,
+      thickness: markupDefaults.thickness,
+      dir: 0,
+    });
+    const screen = screenRectForHighlight(drawRect.x, drawRect.y, drawRect.width, drawRect.height, page, rotation, visualWidth, visualHeight);
     if (!screen) return;
 
     const el = document.createElement("div");
@@ -891,8 +947,9 @@ export function mountAnnotateView(root, opts = {}) {
     el.style.top = `${screen.top}px`;
     el.style.width = `${screen.width}px`;
     el.style.height = `${screen.height}px`;
-    el.style.background = highlightDefaults.color;
-    el.style.opacity = highlightDefaults.opacity;
+    el.style.background = markupDefaults.color;
+    el.style.opacity = markupDefaults.opacity;
+    if (style !== "highlight") el.style.borderRadius = "0";
     el.style.pointerEvents = "none";
 
     overlay.appendChild(el);
@@ -1219,6 +1276,8 @@ export function mountAnnotateView(root, opts = {}) {
       highlightPageId = pageId;
       highlightSnapping = false;
       highlightStartPos = null;
+      highlightStartDir = 0;
+      currentMarkupStyle = getState().annotateMarkupStyle ?? DEFAULT_MARKUP_STYLE;
       // Alt + pointerdown forces free-rectangle mode. Otherwise snap to digital
       // text when the text layer is ready and the pointer hits a character.
       if (!e.altKey) {
@@ -1228,9 +1287,14 @@ export function mountAnnotateView(root, opts = {}) {
           if (pos) {
             highlightSnapping = true;
             highlightStartPos = pos;
+            highlightStartDir = layer.lines[pos.lineIndex].dir;
           }
         }
       }
+      // Free drags run the mark's baseline along visual rightward at the page's
+      // effective rotation, so an underline hugs the visual bottom edge at every
+      // rotation (0/90/180/270).
+      if (!highlightSnapping) highlightStartDir = freeMarkDir(getEffectiveRotation(page));
     } else if (currentTool === "image") {
       // Click to place an image: open file picker, then insert at click position.
       // Placement is computed in visual space (centered on the visual click, aspect
@@ -1444,8 +1508,11 @@ export function mountAnnotateView(root, opts = {}) {
         if (layer && endPos) {
           const rects = selectionRects(layer, highlightStartPos, endPos);
           if (rects.length > 0) {
-            const highlightDefaults = annotationDefaultsFromState(state, "highlight");
+            const highlightDefaults = annotationDefaultsFromState(state, "highlight", currentMarkupStyle);
             const anns = rects.map((r) => createHighlightAnnotation(r.x, r.y, r.width, r.height, {
+              style: currentMarkupStyle,
+              thickness: currentMarkupStyle !== "highlight" ? highlightDefaults.thickness : undefined,
+              dir: highlightStartDir,
               color: highlightDefaults.color,
               opacity: highlightDefaults.opacity,
             }));
@@ -1471,8 +1538,11 @@ export function mountAnnotateView(root, opts = {}) {
       const height = Math.abs(highlightStart.y - dragAnnotationStart.y);
 
       if (width > 1 && height > 1) {
-        const highlightDefaults = annotationDefaultsFromState(state, "highlight");
+        const highlightDefaults = annotationDefaultsFromState(state, "highlight", currentMarkupStyle);
         const ann = createHighlightAnnotation(x, y, width, height, {
+          style: currentMarkupStyle,
+          thickness: currentMarkupStyle !== "highlight" ? highlightDefaults.thickness : undefined,
+          dir: highlightStartDir,
           color: highlightDefaults.color,
           opacity: highlightDefaults.opacity,
         });

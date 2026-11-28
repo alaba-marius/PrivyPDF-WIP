@@ -86,9 +86,14 @@ class FakeElement {
         "page-number-margin", "page-number-apply-to", "watermark-enabled",
         "watermark-size-mode", "watermark-fixed-size", "meta-subject",
         "meta-keywords", "meta-clear", "split-summary", "split-ranges-error",
-        "annotate-panel-section", "annotate-panel-hint", "annotate-highlight-options",
-        "annotate-text-options", "annotate-font-size", "annotate-opacity",
+        "annotate-panel-section", "annotate-panel-hint", "annotate-markup-style",
+        "annotate-markup-colors", "annotate-thickness-field", "annotate-thickness",
+        "annotate-opacity-field", "annotate-opacity", "annotate-image-options",
+        "annotate-image-opacity", "annotate-image-keep-proportions",
+        "annotate-image-choose", "annotate-image-replace", "annotate-image-delete",
         "annotate-panel-delete", "annotate-annotation-list",
+        "annotate-group-markup", "annotate-group-text", "annotate-empty",
+        "annotate-aria-live", "annotate-text-controls",
       ];
 
       for (const id of elementIds) {
@@ -619,9 +624,12 @@ test("panel smoke: renders without errors with full state", async () => {
   const deleteBtn = container.querySelector("#annotate-panel-delete");
   assert.equal(deleteBtn.hidden, false, "Delete button should be visible when annotation is selected");
 
-  // Verify hint text
-  const hint = container.querySelector("#annotate-panel-hint");
-  assert.ok(hint.textContent.includes("annotation"), "Hint should mention annotations");
+  // Verify aria-live region exists and exactly one group shows: a selected
+  // highlight shows the markup group even when the tool is "select" (selected
+  // type wins over tool); the empty state stays hidden.
+  assert.ok(container.querySelector("#annotate-aria-live"), "aria-live region exists");
+  assert.equal(container.querySelector("#annotate-group-markup").hidden, false, "markup group shows for a selected highlight");
+  assert.equal(container.querySelector("#annotate-empty").hidden, true, "empty state hidden when a mark is selected");
 
   // Verify color swatches are populated (they may be empty in fake DOM, but no error)
   // Just verify no throw
@@ -1183,16 +1191,54 @@ test("panel smoke: option groups follow selected annotation type, not just tool"
     <span id="split-ranges-error" hidden></span>
     <div id="annotate-panel-section" hidden>
       <span id="annotate-panel-hint"></span>
-      <div id="annotate-highlight-options" hidden></div>
-      <div id="annotate-text-options" hidden></div>
-      <select id="annotate-font-size"></select>
-      <input id="annotate-opacity" type="range" min="0" max="100" value="40">
+      <div class="ds-form-field">
+        <label class="ds-field-label" for="annotate-markup-style">Style</label>
+        <div class="ds-segmented annotate-markup-style-group" id="annotate-markup-style" role="radiogroup" aria-label="Markup style">
+          <button class="ds-segment annotate-markup-segment" data-style="highlight" aria-checked="true" role="radio" aria-label="Highlight"><i data-icon="highlighter"></i><span>Highlight</span></button>
+          <button class="ds-segment annotate-markup-segment" data-style="underline" aria-checked="false" role="radio" aria-label="Underline"><i data-icon="underline"></i><span>Underline</span></button>
+          <button class="ds-segment annotate-markup-segment" data-style="strikethrough" aria-checked="false" role="radio" aria-label="Strikethrough"><i data-icon="strikethrough"></i><span>Strikethrough</span></button>
+        </div>
+      </div>
+      <div class="ds-form-field">
+        <label class="ds-field-label" for="annotate-markup-colors">Color</label>
+        <div class="ds-color-swatch-group annotate-markup-colors" id="annotate-markup-colors" role="group" aria-label="Markup color">
+          <button class="ds-color-swatch" data-color="#ffe14d" aria-checked="true"></button>
+          <button class="ds-color-swatch" data-color="#d92d20"></button>
+          <button class="ds-color-swatch" data-color="#0066ff"></button>
+          <button class="ds-color-swatch" data-color="#00aa00"></button>
+          <button class="ds-color-swatch" data-color="#6a0dad"></button>
+        </div>
+      </div>
+      <div class="ds-form-field annotate-thickness-field" id="annotate-thickness-field">
+        <label class="ds-field-label" for="annotate-thickness">Thickness</label>
+        <input class="ds-input" id="annotate-thickness" type="range" min="0.5" max="8" step="0.5" value="1.5" />
+      </div>
+      <div class="ds-form-field annotate-opacity-field" id="annotate-opacity-field">
+        <label class="ds-field-label" for="annotate-opacity">Opacity</label>
+        <input class="ds-input" id="annotate-opacity" type="range" min="0" max="100" value="40" />
+      </div>
+      <div class="annotate-image-options" id="annotate-image-options" hidden>
+        <p class="annotate-image-hint" id="annotate-image-hint">Insert image: choose an image to place on the page.</p>
+        <div class="ds-form-field">
+          <label class="ds-field-label" for="annotate-image-opacity">Opacity</label>
+          <input class="ds-input" id="annotate-image-opacity" type="range" min="5" max="100" value="100" />
+        </div>
+        <div class="ds-form-field">
+          <label class="ds-field-label" for="annotate-image-keep-proportions">Keep proportions</label>
+          <input id="annotate-image-keep-proportions" type="checkbox" checked />
+        </div>
+        <div class="ds-stack ds-stack--sm annotate-image-actions">
+          <button class="ds-btn ds-btn--sm" id="annotate-image-choose">Choose image</button>
+          <button class="ds-btn ds-btn--sm ds-btn--ghost" id="annotate-image-replace">Replace image</button>
+          <button class="ds-btn ds-btn--sm ds-btn--ghost" id="annotate-image-delete">Delete</button>
+        </div>
+      </div>
       <button id="annotate-panel-delete" hidden>Delete</button>
       <div id="annotate-annotation-list"></div>
     </div>
   `;
 
-  // Tool is "select" but a highlight annotation is selected: highlight options
+  // Tool is "select" but a highlight annotation is selected: markup style group
   // must still show.
   const storeSelectedHighlight = {
     ...mockStore,
@@ -1219,10 +1265,73 @@ test("panel smoke: option groups follow selected annotation type, not just tool"
 
   panel.render(storeSelectedHighlight.get());
 
-  const highlightOptions = container.querySelector("#annotate-highlight-options");
-  const textOptions = container.querySelector("#annotate-text-options");
-  assert.equal(highlightOptions.hidden, false, "Highlight options should show when a highlight is selected even with tool 'select'");
-  assert.equal(textOptions.hidden, true, "Text options should stay hidden when a highlight is selected with tool 'select'");
+  const markupStyleGroup = container.querySelector("#annotate-markup-style");
+  assert.equal(markupStyleGroup.hidden, false, "Markup style group should show when a highlight is selected even with tool 'select'");
+
+  panel.destroy();
+});
+
+test("panel smoke: clicking a markup style segment restyles the selected mark (one undo entry, attrs kept)", async () => {
+  const { mountPanel } = await import("../js/ui/panel.js");
+
+  const container = fakeDoc.createElement("div");
+  container.id = "panel-root-restyle";
+  fakeDoc.body.appendChild(container);
+  // Trigger the Fake DOM auto-creation of panel elements.
+  container.innerHTML = "<div></div>";
+
+  let updateCalls = 0;
+  const countingUpdate = (mutator) => {
+    updateCalls++;
+    return mockUpdateAnnotations(mutator);
+  };
+
+  // Build the markup style segments before mount so panel.js attaches listeners.
+  const styleGroup = container.querySelector("#annotate-markup-style");
+  let underlineBtn = null;
+  ["highlight", "underline", "strikethrough"].forEach((style) => {
+    const btn = new FakeElement("button");
+    btn.className = `ds-segment annotate-markup-segment`;
+    btn.dataset.style = style;
+    btn.setAttribute("aria-checked", style === "highlight" ? "true" : "false");
+    btn.setAttribute("role", "radio");
+    if (style === "underline") underlineBtn = btn;
+    styleGroup.appendChild(btn);
+  });
+
+  const store = {
+    ...mockStore,
+    get: () => ({
+      ...mockStore.get(),
+      annotateSelectedAnnotationId: "h1",
+      annotateSelectedPageId: "p1",
+    }),
+  };
+
+  const panel = mountPanel(container, {
+    onFileNameChange: mockOnFileNameChange,
+    onExportModeChange: mockOnExportModeChange,
+    onDownloadPDF: mockOnDownloadPDF,
+    onSplitPDF: mockOnSplitPDF,
+    onPreview: mockOnPreview,
+    onExportOptionsChange: mockOnExportOptionsChange,
+    onSourceRemove: mockOnSourceRemove,
+    getState: () => store.get(),
+    updateAnnotations: countingUpdate,
+    store,
+    onAnnotationSelect: () => {},
+  });
+
+  panel.render(store.get());
+
+  underlineBtn.dispatchEvent({ type: "click" });
+
+  const h1 = mockStore.annotations.p1[0];
+  assert.equal(h1.style, "underline", "selected mark restyled to underline");
+  assert.equal(h1.color, "#ffe14d", "color kept");
+  assert.equal(h1.opacity, 0.4, "opacity kept");
+  assert.equal(h1.thickness, 1.5, "thickness clamped to default");
+  assert.equal(updateCalls, 1, "exactly one undo entry");
 
   panel.destroy();
 });
@@ -1273,24 +1382,65 @@ test("panel smoke: font size shows selected annotation's value, not store defaul
     <span id="split-ranges-error" hidden></span>
     <div id="annotate-panel-section" hidden>
       <span id="annotate-panel-hint"></span>
-      <div id="annotate-highlight-options" hidden></div>
-      <div id="annotate-text-options" hidden></div>
-      <select id="annotate-font-size"></select>
-      <input id="annotate-opacity" type="range" min="0" max="100" value="40">
+      <div class="ds-form-field">
+        <label class="ds-field-label" for="annotate-markup-style">Style</label>
+        <div class="ds-segmented annotate-markup-style-group" id="annotate-markup-style" role="radiogroup" aria-label="Markup style">
+          <button class="ds-segment annotate-markup-segment" data-style="highlight" aria-checked="true" role="radio" aria-label="Highlight"><i data-icon="highlighter"></i><span>Highlight</span></button>
+          <button class="ds-segment annotate-markup-segment" data-style="underline" aria-checked="false" role="radio" aria-label="Underline"><i data-icon="underline"></i><span>Underline</span></button>
+          <button class="ds-segment annotate-markup-segment" data-style="strikethrough" aria-checked="false" role="radio" aria-label="Strikethrough"><i data-icon="strikethrough"></i><span>Strikethrough</span></button>
+        </div>
+      </div>
+      <div class="ds-form-field">
+        <label class="ds-field-label" for="annotate-markup-colors">Color</label>
+        <div class="ds-color-swatch-group annotate-markup-colors" id="annotate-markup-colors" role="group" aria-label="Markup color">
+          <button class="ds-color-swatch" data-color="#ffe14d" aria-checked="true"></button>
+          <button class="ds-color-swatch" data-color="#d92d20"></button>
+          <button class="ds-color-swatch" data-color="#0066ff"></button>
+          <button class="ds-color-swatch" data-color="#00aa00"></button>
+          <button class="ds-color-swatch" data-color="#6a0dad"></button>
+        </div>
+      </div>
+      <div class="ds-form-field annotate-thickness-field" id="annotate-thickness-field">
+        <label class="ds-field-label" for="annotate-thickness">Thickness</label>
+        <input class="ds-input" id="annotate-thickness" type="range" min="0.5" max="8" step="0.5" value="1.5" />
+      </div>
+      <div class="ds-form-field annotate-opacity-field" id="annotate-opacity-field">
+        <label class="ds-field-label" for="annotate-opacity">Opacity</label>
+        <input class="ds-input" id="annotate-opacity" type="range" min="0" max="100" value="40" />
+      </div>
+      <div class="annotate-image-options" id="annotate-image-options" hidden>
+        <p class="annotate-image-hint" id="annotate-image-hint">Insert image: choose an image to place on the page.</p>
+        <div class="ds-form-field">
+          <label class="ds-field-label" for="annotate-image-opacity">Opacity</label>
+          <input class="ds-input" id="annotate-image-opacity" type="range" min="5" max="100" value="100" />
+        </div>
+        <div class="ds-form-field">
+          <label class="ds-field-label" for="annotate-image-keep-proportions">Keep proportions</label>
+          <input id="annotate-image-keep-proportions" type="checkbox" checked />
+        </div>
+        <div class="ds-stack ds-stack--sm annotate-image-actions">
+          <button class="ds-btn ds-btn--sm" id="annotate-image-choose">Choose image</button>
+          <button class="ds-btn ds-btn--sm ds-btn--ghost" id="annotate-image-replace">Replace image</button>
+          <button class="ds-btn ds-btn--sm ds-btn--ghost" id="annotate-image-delete">Delete</button>
+        </div>
+      </div>
       <button id="annotate-panel-delete" hidden>Delete</button>
       <div id="annotate-annotation-list"></div>
     </div>
   `;
 
-  // Store default font size is 12 but the selected text annotation t1 has 14:
-  // the panel must show 14.
-  const storeFontDefault12 = {
+  // Selected highlight annotation h1 uses opacity 0.7: the panel must show
+  // the annotation's opacity, not the store default.
+  const storeMarkupOpacity = {
     ...mockStore,
     get: () => ({
       ...mockStore.get(),
-      annotateFontSize: 12,
+      annotations: {
+        p1: [{ id: "h1", type: "highlight", x: 100, y: 100, width: 200, height: 50, color: "#ffe14d", opacity: 0.7 }],
+      },
+      annotateMarkupStyle: "highlight",
       annotateCurrentTool: "select",
-      annotateSelectedAnnotationId: "t1",
+      annotateSelectedAnnotationId: "h1",
       annotateSelectedPageId: "p1",
     }),
   };
@@ -1303,15 +1453,15 @@ test("panel smoke: font size shows selected annotation's value, not store defaul
     onPreview: mockOnPreview,
     onExportOptionsChange: mockOnExportOptionsChange,
     onSourceRemove: mockOnSourceRemove,
-    getState: () => storeFontDefault12.get(),
+    getState: () => storeMarkupOpacity.get(),
     updateAnnotations: mockUpdateAnnotations,
-    store: storeFontDefault12,
+    store: storeMarkupOpacity,
   });
 
-  panel.render(storeFontDefault12.get());
+  panel.render(storeMarkupOpacity.get());
 
-  const fontSize = container.querySelector("#annotate-font-size");
-  assert.equal(fontSize.value, "14", "Font size should show the selected text annotation's 14, not the store default 12");
+  const opacityInput = container.querySelector("#annotate-opacity");
+  assert.equal(opacityInput.value, "70", "Opacity field should show the selected highlight's 70, not the store default 40");
 
   panel.destroy();
 });
@@ -1362,33 +1512,64 @@ test("panel smoke: font size select keeps a non-preset value", async () => {
     <span id="split-ranges-error" hidden></span>
     <div id="annotate-panel-section" hidden>
       <span id="annotate-panel-hint"></span>
-      <div id="annotate-highlight-options" hidden></div>
-      <div id="annotate-text-options" hidden></div>
-      <select id="annotate-font-size"></select>
-      <input id="annotate-opacity" type="range" min="0" max="100" value="40">
+      <div class="ds-form-field">
+        <label class="ds-field-label" for="annotate-markup-style">Style</label>
+        <div class="ds-segmented annotate-markup-style-group" id="annotate-markup-style" role="radiogroup" aria-label="Markup style">
+          <button class="ds-segment annotate-markup-segment" data-style="highlight" aria-checked="true" role="radio" aria-label="Highlight"><i data-icon="highlighter"></i><span>Highlight</span></button>
+          <button class="ds-segment annotate-markup-segment" data-style="underline" aria-checked="false" role="radio" aria-label="Underline"><i data-icon="underline"></i><span>Underline</span></button>
+          <button class="ds-segment annotate-markup-segment" data-style="strikethrough" aria-checked="false" role="radio" aria-label="Strikethrough"><i data-icon="strikethrough"></i><span>Strikethrough</span></button>
+        </div>
+      </div>
+      <div class="ds-form-field">
+        <label class="ds-field-label" for="annotate-markup-colors">Color</label>
+        <div class="ds-color-swatch-group annotate-markup-colors" id="annotate-markup-colors" role="group" aria-label="Markup color">
+          <button class="ds-color-swatch" data-color="#ffe14d" aria-checked="true"></button>
+          <button class="ds-color-swatch" data-color="#d92d20"></button>
+          <button class="ds-color-swatch" data-color="#0066ff"></button>
+          <button class="ds-color-swatch" data-color="#00aa00"></button>
+          <button class="ds-color-swatch" data-color="#6a0dad"></button>
+        </div>
+      </div>
+      <div class="ds-form-field annotate-thickness-field" id="annotate-thickness-field">
+        <label class="ds-field-label" for="annotate-thickness">Thickness</label>
+        <input class="ds-input" id="annotate-thickness" type="range" min="0.5" max="8" step="0.5" value="1.5" />
+      </div>
+      <div class="ds-form-field annotate-opacity-field" id="annotate-opacity-field">
+        <label class="ds-field-label" for="annotate-opacity">Opacity</label>
+        <input class="ds-input" id="annotate-opacity" type="range" min="0" max="100" value="40" />
+      </div>
+      <div class="annotate-image-options" id="annotate-image-options" hidden>
+        <p class="annotate-image-hint" id="annotate-image-hint">Insert image: choose an image to place on the page.</p>
+        <div class="ds-form-field">
+          <label class="ds-field-label" for="annotate-image-opacity">Opacity</label>
+          <input class="ds-input" id="annotate-image-opacity" type="range" min="5" max="100" value="100" />
+        </div>
+        <div class="ds-form-field">
+          <label class="ds-field-label" for="annotate-image-keep-proportions">Keep proportions</label>
+          <input id="annotate-image-keep-proportions" type="checkbox" checked />
+        </div>
+        <div class="ds-stack ds-stack--sm annotate-image-actions">
+          <button class="ds-btn ds-btn--sm" id="annotate-image-choose">Choose image</button>
+          <button class="ds-btn ds-btn--sm ds-btn--ghost" id="annotate-image-replace">Replace image</button>
+          <button class="ds-btn ds-btn--sm ds-btn--ghost" id="annotate-image-delete">Delete</button>
+        </div>
+      </div>
       <button id="annotate-panel-delete" hidden>Delete</button>
       <div id="annotate-annotation-list"></div>
     </div>
   `;
 
-  // Selected text annotation uses font size 20, which is not one of the preset
-  // options [8,10,12,14,16,18,24,36,48,72]: the select must still show 20.
-  const annotationsFont20 = {
-    p1: [
-      { id: "t20", type: "text", x: 100, y: 200, text: "Big", fontSize: 20, color: "#000000" },
-    ],
-  };
-  const storeFont20 = {
+  // Thickness slider is hidden for highlight style and shown for underline /
+  // strikethrough styles.
+  const storeUnderline = {
     ...mockStore,
     get: () => ({
       ...mockStore.get(),
-      annotations: annotationsFont20,
-      annotateFontSize: 12,
-      annotateCurrentTool: "select",
-      annotateSelectedAnnotationId: "t20",
+      annotateMarkupStyle: "underline",
+      annotateCurrentTool: "highlight",
+      annotateSelectedAnnotationId: null,
       annotateSelectedPageId: "p1",
     }),
-    annotations: annotationsFont20,
   };
 
   const panel = mountPanel(container, {
@@ -1399,16 +1580,588 @@ test("panel smoke: font size select keeps a non-preset value", async () => {
     onPreview: mockOnPreview,
     onExportOptionsChange: mockOnExportOptionsChange,
     onSourceRemove: mockOnSourceRemove,
-    getState: () => storeFont20.get(),
+    getState: () => storeUnderline.get(),
     updateAnnotations: mockUpdateAnnotations,
-    store: storeFont20,
+    store: storeUnderline,
   });
 
-  panel.render(storeFont20.get());
+  panel.render(storeUnderline.get());
 
-  const fontSize = container.querySelector("#annotate-font-size");
-  assert.equal(fontSize.value, "20", "Font size should show the selected annotation's 20 even though it is not a preset option");
+  const thicknessField = container.querySelector("#annotate-thickness-field");
+  const opacityField = container.querySelector("#annotate-opacity-field");
+  assert.equal(thicknessField.hidden, false, "Thickness field should show for underline style");
+  assert.equal(opacityField.hidden, true, "Opacity field should hide for underline style");
+
+  // Switch back to highlight: thickness hides, opacity shows.
+  const storeHighlight = {
+    ...mockStore,
+    get: () => ({
+      ...mockStore.get(),
+      annotateMarkupStyle: "highlight",
+      annotateCurrentTool: "highlight",
+      annotateSelectedAnnotationId: null,
+      annotateSelectedPageId: "p1",
+    }),
+  };
+  panel.render(storeHighlight.get());
+  assert.equal(thicknessField.hidden, true, "Thickness field should hide for highlight style");
+  assert.equal(opacityField.hidden, false, "Opacity field should show for highlight style");
 
   panel.destroy();
 });
+
+test("panel smoke: changing font size edits the selected text annotation (one undo entry)", async () => {
+  const { mountPanel } = await import("../js/ui/panel.js");
+
+  const container = fakeDoc.createElement("div");
+  container.id = "panel-root-font";
+  fakeDoc.body.appendChild(container);
+  container.innerHTML = "<div></div>";
+
+  let anns = { p1: [{ id: "t1", type: "text", x: 10, y: 10, text: "Hi", fontSize: 12 }] };
+  let updateCalls = 0;
+  const store = {
+    get: () => ({
+      ...mockStore.get(),
+      annotations: anns,
+      annotateSelectedAnnotationId: "t1",
+      annotateSelectedPageId: "p1",
+      annotateCurrentTool: "text",
+    }),
+    patch: () => {},
+  };
+  const countingUpdate = (mutator) => {
+    updateCalls++;
+    anns = mutator(anns);
+    return anns;
+  };
+
+  const panel = mountPanel(container, {
+    getState: () => store.get(),
+    updateAnnotations: countingUpdate,
+    store,
+    onAnnotationSelect: () => {},
+  });
+
+  panel.render(store.get());
+
+  const select = container.querySelector("#annotate-font-size");
+  assert.ok(select, "font size select must exist");
+  select.value = "24";
+  select.dispatchEvent({ type: "change" });
+
+  assert.equal(anns.p1[0].fontSize, 24, "selected text annotation fontSize updated to 24");
+  assert.equal(updateCalls, 1, "exactly one undo entry");
+
+  panel.destroy();
+});
+
+test("panel smoke: changing text color edits the selected text annotation (one undo entry)", async () => {
+  const { mountPanel } = await import("../js/ui/panel.js");
+
+  const container = fakeDoc.createElement("div");
+  container.id = "panel-root-tcolor";
+  fakeDoc.body.appendChild(container);
+  container.innerHTML = "<div></div>";
+
+  let anns = { p1: [{ id: "t1", type: "text", x: 10, y: 10, text: "Hi", color: "#000000" }] };
+  let updateCalls = 0;
+  const store = {
+    get: () => ({
+      ...mockStore.get(),
+      annotations: anns,
+      annotateSelectedAnnotationId: "t1",
+      annotateSelectedPageId: "p1",
+      annotateCurrentTool: "text",
+    }),
+    patch: () => {},
+  };
+  const countingUpdate = (mutator) => {
+    updateCalls++;
+    anns = mutator(anns);
+    return anns;
+  };
+
+  const panel = mountPanel(container, {
+    getState: () => store.get(),
+    updateAnnotations: countingUpdate,
+    store,
+    onAnnotationSelect: () => {},
+  });
+
+  panel.render(store.get());
+
+  const group = container.querySelector("#annotate-text-colors");
+  assert.ok(group, "text color group must exist");
+  const redSwatch = [...group.querySelectorAll(".ds-color-swatch")].find((s) => s.dataset.color === "#ff0000");
+  assert.ok(redSwatch, "red text color swatch must exist");
+  redSwatch.dispatchEvent({ type: "click" });
+
+  assert.equal(anns.p1[0].color, "#ff0000", "selected text annotation color updated to red");
+  assert.equal(updateCalls, 1, "exactly one undo entry");
+
+  panel.destroy();
+});
+
+test("panel smoke: exactly one annotate group shows per tool/selection combo", async () => {
+  const { mountPanel } = await import("../js/ui/panel.js");
+
+  function renderWith(overrides) {
+    const container = fakeDoc.createElement("div");
+    container.id = "panel-root-groups";
+    fakeDoc.body.appendChild(container);
+    container.innerHTML = `
+      <input id="doc-name" value="test">
+      <span id="stat-pages">0</span>
+      <span id="stat-source">0</span>
+      <span id="stat-size">0 B</span>
+      <div id="source-files"></div>
+      <button id="export-all">All</button>
+      <button id="export-selected">Selected</button>
+      <button id="download-pdf">Download</button>
+      <span id="privacy-count">0</span>
+      <button id="btn-preview">Preview</button>
+      <button id="btn-split">Split</button>
+      <select id="page-number-mode"><option value="none">None</option></select>
+      <select id="page-number-format"><option value="n">1, 2, 3</option></select>
+      <input id="page-number-skip-first" type="checkbox">
+      <input id="watermark-text" value="">
+      <span id="watermark-error" hidden></span>
+      <input id="watermark-angle" value="0">
+      <input id="watermark-opacity" value="30">
+      <input id="meta-title" value="">
+      <input id="meta-author" value="">
+      <select id="split-mode"><option value="every">Every N</option></select>
+      <input id="split-every" value="1">
+      <input id="split-ranges" value="">
+      <select id="page-number-position"><option value="bottom-center">Bottom Center</option></select>
+      <input id="page-number-start" value="1">
+      <input id="page-number-font-size" value="10">
+      <input id="page-number-margin" value="36">
+      <select id="page-number-apply-to"><option value="all">All</option></select>
+      <input id="watermark-enabled" type="checkbox">
+      <select id="watermark-size-mode"><option value="auto">Auto</option></select>
+      <input id="watermark-fixed-size" value="72">
+      <input id="meta-subject" value="">
+      <input id="meta-keywords" value="">
+      <button id="meta-clear">Clear</button>
+      <span id="split-summary" hidden></span>
+      <span id="split-ranges-error" hidden></span>
+      <div id="annotate-panel-section" hidden>
+        <span id="annotate-panel-hint"></span>
+        <div id="annotate-group-markup" hidden></div>
+        <div id="annotate-group-text" hidden></div>
+        <div id="annotate-group-image" hidden></div>
+        <p id="annotate-empty" hidden>Select a mark to edit it</p>
+        <div id="annotate-aria-live"></div>
+        <div id="annotate-text-controls"></div>
+        <div id="annotate-image-options" hidden></div>
+        <button id="annotate-panel-delete" hidden>Delete</button>
+        <div id="annotate-annotation-list"></div>
+      </div>
+    `;
+
+    const store = {
+      ...mockStore,
+      get: () => ({
+        ...mockStore.get(),
+        ...overrides,
+      }),
+      patch: () => {},
+    };
+    const panel = mountPanel(container, {
+      getState: () => store.get(),
+      updateAnnotations: () => {},
+      store,
+      onAnnotationSelect: () => {},
+    });
+    panel.render(store.get());
+    return { container, panel };
+  }
+
+  const cases = [
+    // tool, selectedId, annotations on p1, expectMarkup, expectText, expectImage, expectEmpty
+    ["select", "h1", [{ id: "h1", type: "highlight", style: "underline" }], true, false, false, false],
+    ["select", "t1", [{ id: "t1", type: "text" }], false, true, false, false],
+    ["select", "img1", [{ id: "img1", type: "image" }], false, false, true, false],
+    ["highlight", null, [], true, false, false, false],
+    ["text", null, [], false, true, false, false],
+    ["image", null, [], false, false, true, false],
+    ["select", null, [], false, false, false, true],
+  ];
+
+  for (const [tool, selectedId, anns, expectMarkup, expectText, expectImage, expectEmpty] of cases) {
+    const overrides = {
+      annotateCurrentTool: tool,
+      annotateSelectedAnnotationId: selectedId,
+      annotateSelectedPageId: "p1",
+      annotations: { p1: anns },
+    };
+    const { container, panel } = renderWith(overrides);
+    assert.equal(container.querySelector("#annotate-group-markup").hidden, !expectMarkup, `markup tool=${tool} sel=${selectedId}`);
+    assert.equal(container.querySelector("#annotate-group-text").hidden, !expectText, `text tool=${tool} sel=${selectedId}`);
+    assert.equal(container.querySelector("#annotate-image-options").hidden, !expectImage, `image tool=${tool} sel=${selectedId}`);
+    assert.equal(container.querySelector("#annotate-empty").hidden, !expectEmpty, `empty tool=${tool} sel=${selectedId}`);
+    panel.destroy();
+  }
+});
+
+test("panel smoke: markup style segmented control is icon-only with 3 segments", async () => {
+  const { mountPanel } = await import("../js/ui/panel.js");
+
+  const container = fakeDoc.createElement("div");
+  container.id = "panel-root-segments";
+  fakeDoc.body.appendChild(container);
+  container.innerHTML = "<div></div>";
+
+  const store = {
+    ...mockStore,
+    get: () => mockStore.get(),
+    patch: () => {},
+  };
+  const panel = mountPanel(container, {
+    getState: () => store.get(),
+    updateAnnotations: () => {},
+    store,
+    onAnnotationSelect: () => {},
+  });
+  panel.render(store.get());
+
+  const group = container.querySelector("#annotate-markup-style");
+  assert.ok(group, "markup style group exists");
+  const segments = group.querySelectorAll(".annotate-markup-segment");
+  assert.equal(segments.length, 3, "three markup segments");
+  const styles = [...segments].map((s) => s.dataset.style);
+  assert.deepEqual(styles, ["highlight", "underline", "strikethrough"], "segment styles");
+  for (const seg of segments) {
+    assert.equal(seg.getAttribute("role"), "radio", "segment is a radio");
+    assert.ok(seg.getAttribute("aria-label"), "segment has aria-label");
+    const icons = seg.querySelectorAll("i");
+    assert.equal(icons.length, 1, "segment has exactly one icon");
+    const spans = seg.querySelectorAll("span");
+    assert.equal(spans.length, 0, "segment is icon-only (no visible text span)");
+  }
+
+  panel.destroy();
+});
+
+test("panel smoke: five markup color dots have the new backgrounds and order", async () => {
+  const { mountPanel } = await import("../js/ui/panel.js");
+
+  const container = fakeDoc.createElement("div");
+  container.id = "panel-root-dots";
+  fakeDoc.body.appendChild(container);
+  container.innerHTML = "<div></div>";
+
+  const store = {
+    ...mockStore,
+    get: () => mockStore.get(),
+    patch: () => {},
+  };
+  const panel = mountPanel(container, {
+    getState: () => store.get(),
+    updateAnnotations: () => {},
+    store,
+    onAnnotationSelect: () => {},
+  });
+  panel.render(store.get());
+
+  const colors = container.querySelector("#annotate-markup-colors");
+  assert.ok(colors, "markup colors container exists");
+  const dots = colors.querySelectorAll(".annotate-color-dot");
+  assert.equal(dots.length, 5, "five color dots");
+  const expected = ["#d92d20", "#0f0f12", "#0d44e8", "#ffe14d", "#6bbf6b"];
+  for (let i = 0; i < expected.length; i++) {
+    const dot = dots[i];
+    assert.equal(dot.dataset.color, expected[i], `dot ${i} data-color`);
+    assert.equal(dot.style.backgroundColor, expected[i], `dot ${i} background filled from data-color`);
+    assert.ok(dot.className.includes("ds-color-swatch"), `dot ${i} is a color swatch`);
+  }
+
+  panel.destroy();
+});
+
+test("panel smoke: annotation list shows N on this page and is collapsed by default", async () => {
+  const { mountPanel } = await import("../js/ui/panel.js");
+
+  const container = fakeDoc.createElement("div");
+  container.id = "panel-root-list";
+  fakeDoc.body.appendChild(container);
+  container.innerHTML = `
+    <input id="doc-name" value="test">
+    <span id="stat-pages">0</span>
+    <div id="source-files"></div>
+    <button id="download-pdf">Download</button>
+    <span id="privacy-count">0</span>
+    <button id="btn-preview">Preview</button>
+    <button id="btn-split">Split</button>
+    <select id="page-number-mode"><option value="none">None</option></select>
+    <select id="page-number-format"><option value="n">1, 2, 3</option></select>
+    <input id="watermark-text" value="">
+    <span id="watermark-error" hidden></span>
+    <input id="watermark-angle" value="0">
+    <input id="watermark-opacity" value="30">
+    <input id="meta-title" value="">
+    <input id="meta-author" value="">
+    <select id="split-mode"><option value="every">Every N</option></select>
+    <input id="split-every" value="1">
+    <input id="split-ranges" value="">
+    <select id="page-number-position"><option value="bottom-center">Bottom Center</option></select>
+    <input id="page-number-start" value="1">
+    <input id="page-number-font-size" value="10">
+    <input id="page-number-margin" value="36">
+    <select id="page-number-apply-to"><option value="all">All</option></select>
+    <input id="watermark-enabled" type="checkbox">
+    <select id="watermark-size-mode"><option value="auto">Auto</option></select>
+    <input id="watermark-fixed-size" value="72">
+    <input id="meta-subject" value="">
+    <input id="meta-keywords" value="">
+    <button id="meta-clear">Clear</button>
+    <span id="split-summary" hidden></span>
+    <span id="split-ranges-error" hidden></span>
+    <div id="annotate-panel-section" hidden>
+      <span id="annotate-panel-hint"></span>
+      <div id="annotate-group-markup" hidden></div>
+      <div id="annotate-group-text" hidden></div>
+      <div id="annotate-group-image" hidden></div>
+      <p id="annotate-empty" hidden>Select a mark to edit it</p>
+      <div id="annotate-aria-live"></div>
+      <div id="annotate-text-controls"></div>
+      <div id="annotate-image-options" hidden></div>
+      <button id="annotate-panel-delete" hidden>Delete</button>
+      <div id="annotate-annotation-list"></div>
+    </div>
+  `;
+
+  const anns = [
+    { id: "h1", type: "highlight", x: 100, y: 100, width: 200, height: 50 },
+    { id: "t1", type: "text", x: 100, y: 200, text: "Hi" },
+    { id: "i1", type: "image", x: 50, y: 50, width: 100, height: 100 },
+  ];
+  const store = {
+    ...mockStore,
+    get: () => ({
+      ...mockStore.get(),
+      annotations: { p1: anns },
+      annotateCurrentPageId: "p1",
+      annotateSelectedAnnotationId: null,
+    }),
+    patch: () => {},
+  };
+  const panel = mountPanel(container, {
+    getState: () => store.get(),
+    updateAnnotations: () => {},
+    store,
+    onAnnotationSelect: () => {},
+  });
+  panel.render(store.get());
+
+  const list = container.querySelector("#annotate-annotation-list");
+  assert.ok(list, "annotation list exists");
+  const items = list.querySelectorAll(".annotate-annotation-item");
+  assert.equal(items.length, 3, "three annotation items listed");
+
+  // Collapsed by default: a header announces the count and items are hidden
+  const header = list.querySelector("#annotate-annotation-header");
+  assert.ok(header, "list has a count header button");
+  assert.ok(header.textContent.includes("3"), "header shows count: " + header.textContent);
+  assert.ok(header.textContent.includes("on this page"), "header says on this page: " + header.textContent);
+  assert.equal(header.getAttribute("aria-expanded"), "false", "list collapsed by default");
+  const itemsWrap = list.querySelector("#annotate-annotation-list-items");
+  assert.ok(itemsWrap, "list items are in a wrapper");
+  assert.equal(itemsWrap.hidden, true, "list items collapsed by default");
+
+  panel.destroy();
+});
+
+test("panel smoke: select tool with nothing selected shows the empty state and no hint paragraph", async () => {
+  const { mountPanel } = await import("../js/ui/panel.js");
+
+  const container = fakeDoc.createElement("div");
+  container.id = "panel-root-empty";
+  fakeDoc.body.appendChild(container);
+  container.innerHTML = `
+    <input id="doc-name" value="test">
+    <div id="source-files"></div>
+    <button id="download-pdf">Download</button>
+    <button id="btn-preview">Preview</button>
+    <button id="btn-split">Split</button>
+    <select id="page-number-mode"><option value="none">None</option></select>
+    <select id="page-number-format"><option value="n">1, 2, 3</option></select>
+    <input id="watermark-text" value="">
+    <span id="watermark-error" hidden></span>
+    <input id="watermark-angle" value="0">
+    <input id="watermark-opacity" value="30">
+    <input id="meta-title" value="">
+    <input id="meta-author" value="">
+    <select id="split-mode"><option value="every">Every N</option></select>
+    <input id="split-every" value="1">
+    <input id="split-ranges" value="">
+    <select id="page-number-position"><option value="bottom-center">Bottom Center</option></select>
+    <input id="page-number-start" value="1">
+    <input id="page-number-font-size" value="10">
+    <input id="page-number-margin" value="36">
+    <select id="page-number-apply-to"><option value="all">All</option></select>
+    <input id="watermark-enabled" type="checkbox">
+    <select id="watermark-size-mode"><option value="auto">Auto</option></select>
+    <input id="watermark-fixed-size" value="72">
+    <input id="meta-subject" value="">
+    <input id="meta-keywords" value="">
+    <button id="meta-clear">Clear</button>
+    <span id="split-summary" hidden></span>
+    <span id="split-ranges-error" hidden></span>
+    <div id="annotate-panel-section" hidden>
+      <div id="annotate-group-markup" hidden></div>
+      <div id="annotate-group-text" hidden></div>
+      <div id="annotate-group-image" hidden></div>
+      <p id="annotate-empty" hidden>Select a mark to edit it</p>
+      <div id="annotate-aria-live"></div>
+      <div id="annotate-text-controls"></div>
+      <div id="annotate-image-options" hidden></div>
+      <button id="annotate-panel-delete" hidden>Delete</button>
+      <div id="annotate-annotation-list"></div>
+    </div>
+  `;
+
+  const store = {
+    ...mockStore,
+    get: () => ({
+      ...mockStore.get(),
+      annotateCurrentTool: "select",
+      annotateSelectedAnnotationId: null,
+      annotateSelectedPageId: "p1",
+    }),
+    patch: () => {},
+  };
+  const panel = mountPanel(container, {
+    getState: () => store.get(),
+    updateAnnotations: () => {},
+    store,
+    onAnnotationSelect: () => {},
+  });
+  panel.render(store.get());
+
+  assert.equal(container.querySelector("#annotate-empty").hidden, false, "empty state shows");
+  assert.equal(container.querySelector("#annotate-group-markup").hidden, true, "markup group hidden");
+  assert.equal(container.querySelector("#annotate-group-text").hidden, true, "text group hidden");
+  assert.equal(container.querySelector("#annotate-image-options").hidden, true, "image group hidden");
+  assert.equal(container.querySelector("#annotate-panel-delete").hidden, true, "delete hidden when nothing selected");
+
+  panel.destroy();
+});
+
+test("panel smoke: markup color dots are named with aria-label and title", async () => {
+  const { mountPanel } = await import("../js/ui/panel.js");
+
+  const container = fakeDoc.createElement("div");
+  container.id = "panel-root-dot-labels";
+  fakeDoc.body.appendChild(container);
+  container.innerHTML = "<div></div>";
+
+  const store = {
+    ...mockStore,
+    get: () => mockStore.get(),
+    patch: () => {},
+  };
+  const panel = mountPanel(container, {
+    getState: () => store.get(),
+    updateAnnotations: () => {},
+    store,
+    onAnnotationSelect: () => {},
+  });
+  panel.render(store.get());
+
+  const colors = container.querySelector("#annotate-markup-colors");
+  assert.ok(colors, "markup colors container exists");
+  const dots = colors.querySelectorAll(".annotate-color-dot");
+  assert.equal(dots.length, 5, "five color dots");
+  const expected = ["Red", "Black", "Blue", "Yellow", "Green"];
+  for (let i = 0; i < expected.length; i++) {
+    assert.equal(dots[i].getAttribute("aria-label"), `${expected[i]} color`, `dot ${i} aria-label`);
+    assert.equal(dots[i].getAttribute("title"), expected[i], `dot ${i} title`);
+    assert.equal(dots[i].className.includes("ds-color-swatch"), true, `dot ${i} is a swatch`);
+    assert.equal(dots[i].className.includes("annotate-color-dot"), true, `dot ${i} is an annotate-color-dot`);
+  }
+
+  panel.destroy();
+});
+
+test("panel smoke: annotation list header is hidden when there are zero annotations on this page", async () => {
+  const { mountPanel } = await import("../js/ui/panel.js");
+
+  const container = fakeDoc.createElement("div");
+  container.id = "panel-root-header-zero";
+  fakeDoc.body.appendChild(container);
+  container.innerHTML = `
+    <input id="doc-name" value="test">
+    <div id="source-files"></div>
+    <div id="annotate-panel-section" hidden>
+      <div id="annotate-annotation-list"></div>
+    </div>
+  `;
+
+  const store = {
+    ...mockStore,
+    get: () => ({
+      ...mockStore.get(),
+      annotations: { p1: [] },
+      annotateCurrentPageId: "p1",
+      annotateSelectedAnnotationId: null,
+    }),
+    patch: () => {},
+  };
+  const panel = mountPanel(container, {
+    getState: () => store.get(),
+    updateAnnotations: () => {},
+    store,
+    onAnnotationSelect: () => {},
+  });
+  panel.render(store.get());
+
+  const header = container.querySelector("#annotate-annotation-header");
+  assert.ok(header, "list has a count header button");
+  assert.equal(header.hidden, true, "header hidden when zero annotations on this page");
+
+  panel.destroy();
+});
+
+test("panel smoke: active markup style segment is ds-segment--active", async () => {
+  const { mountPanel } = await import("../js/ui/panel.js");
+
+  const container = fakeDoc.createElement("div");
+  container.id = "panel-root-active-seg";
+  fakeDoc.body.appendChild(container);
+  container.innerHTML = "<div></div>";
+
+  const store = {
+    ...mockStore,
+    get: () => ({
+      ...mockStore.get(),
+      annotateMarkupStyle: "underline",
+      annotateCurrentTool: "select",
+      annotateSelectedAnnotationId: null,
+    }),
+    patch: () => {},
+  };
+  const panel = mountPanel(container, {
+    getState: () => store.get(),
+    updateAnnotations: () => {},
+    store,
+    onAnnotationSelect: () => {},
+  });
+  panel.render(store.get());
+
+  const group = container.querySelector("#annotate-markup-style");
+  assert.ok(group, "markup style group exists");
+  const segments = group.querySelectorAll(".annotate-markup-segment");
+  assert.equal(segments.length, 3, "three markup segments");
+  const active = [...segments].find((s) => s.dataset.style === "underline");
+  assert.ok(active, "underline segment exists");
+  assert.equal(active.classList.contains("ds-segment--active"), true, "active segment has ds-segment--active");
+  const highlight = [...segments].find((s) => s.dataset.style === "highlight");
+  assert.equal(highlight.classList.contains("ds-segment--active"), false, "inactive segment does not have ds-segment--active");
+
+  panel.destroy();
+});
+
 

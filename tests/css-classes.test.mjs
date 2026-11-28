@@ -319,11 +319,13 @@ test("annotate toolbar has no renderToolOptions function (Bug 2: removed duplica
 });
 
 test("right panel uses ds-form-field for label-above-control layout (Bug 3: no overlap)", (t) => {
-  // The annotate panel should use ds-form-field for highlight color and opacity
-  assert.ok(/ds-form-field[\s\S]*?annotate-highlight-colors/.test(editor), "Highlight color should use ds-form-field");
-  assert.ok(/ds-form-field[\s\S]*?annotate-opacity/.test(editor), "Opacity should use ds-form-field");
-  assert.ok(/ds-form-field[\s\S]*?annotate-font-size/.test(editor), "Text size should use ds-form-field");
-  assert.ok(/ds-form-field[\s\S]*?annotate-text-colors/.test(editor), "Text color should use ds-form-field");
+  // The annotate panel should use ds-form-field for markup style, color, thickness and opacity
+  assert.ok(/ds-form-field[\s\S]*?annotate-markup-style/.test(editor), "Markup style should use ds-form-field");
+  assert.ok(/ds-form-field[\s\S]*?annotate-markup-colors/.test(editor), "Markup color should use ds-form-field");
+  assert.ok(/ds-form-field[\s\S]*?annotate-thickness-field/.test(editor), "Thickness field should use ds-form-field");
+  assert.ok(/ds-form-field[\s\S]*?annotate-opacity-field/.test(editor), "Opacity field should use ds-form-field");
+  assert.ok(!/annotate-highlight-colors/.test(editor), "Old highlight-colors id removed");
+  assert.ok(!/annotate-font-size/.test(editor), "Old font-size id removed");
 });
 
 test("right panel has no position:absolute on form labels or controls (Bug 3: no absolute positioning)", (t) => {

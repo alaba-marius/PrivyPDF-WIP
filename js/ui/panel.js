@@ -15,11 +15,17 @@ import {
   addAnnotation,
   updateAnnotation,
   deleteAnnotation,
-  DEFAULT_TEXT_FONT_SIZE,
-  DEFAULT_TEXT_COLOR,
   DEFAULT_HIGHLIGHT_COLOR,
   DEFAULT_HIGHLIGHT_OPACITY,
   panelControlValues,
+  MARKUP_STYLES,
+  DEFAULT_MARKUP_STYLE,
+  DEFAULT_MARKUP_THICKNESS,
+  MARKUP_THICKNESS_MIN,
+  MARKUP_THICKNESS_MAX,
+  markupColorFromState,
+  markupOpacityFromState,
+  markupThicknessFromState,
 } from "../core/annotations.js";
 import { getAsset, registerAsset } from "../core/image-assets.js";
 
@@ -81,24 +87,156 @@ export function mountPanel(root, opts = {}) {
 
   // Annotate panel controls
   const annotatePanelSection = root.querySelector("#annotate-panel-section");
-  const annotateHint = root.querySelector("#annotate-panel-hint");
-  const annotateHighlightOptions = root.querySelector("#annotate-highlight-options");
-  const annotateTextOptions = root.querySelector("#annotate-text-options");
-  const annotateFontSize = root.querySelector("#annotate-font-size");
+  const annotateAriaLive = root.querySelector("#annotate-aria-live");
+  const annotateMarkupStyleGroup = root.querySelector("#annotate-markup-style");
+  const annotateMarkupColors = root.querySelector("#annotate-markup-colors");
+  const annotateMarkupSegments = () => root.querySelectorAll(".annotate-markup-segment");
+  const annotateMarkupColorSwatches = () => root.querySelectorAll("#annotate-markup-colors .ds-color-swatch");
+  const annotateThicknessField = root.querySelector("#annotate-thickness-field");
+  const annotateThickness = root.querySelector("#annotate-thickness");
+  const annotateOpacityField = root.querySelector("#annotate-opacity-field");
   const annotateOpacity = root.querySelector("#annotate-opacity");
   const annotateDeleteBtn = root.querySelector("#annotate-panel-delete");
   const annotateAnnotationList = root.querySelector("#annotate-annotation-list");
-  const annotateHighlightColorSwatches = () => root.querySelectorAll("#annotate-highlight-options .ds-color-swatch");
-  const annotateTextColorSwatches = () => root.querySelectorAll("#annotate-text-options .ds-color-swatch");
 
-  // Image annotation options
-  const annotateImageOptions = root.querySelector("#annotate-image-options");
-  const annotateImageHint = root.querySelector("#annotate-image-hint");
+  // Group wrappers — exactly one visible at a time
+  const annotateGroupMarkup = root.querySelector("#annotate-group-markup");
+  const annotateGroupText = root.querySelector("#annotate-group-text");
+  const annotateGroupImage = root.querySelector("#annotate-image-options");
+  const annotateEmpty = root.querySelector("#annotate-empty");
+  const annotateTextControls = root.querySelector("#annotate-text-controls");
+
+  // Image annotation options (inside the image group)
   const annotateImageOpacity = root.querySelector("#annotate-image-opacity");
   const annotateImageKeepProportions = root.querySelector("#annotate-image-keep-proportions");
   const annotateImageChoose = root.querySelector("#annotate-image-choose");
   const annotateImageReplace = root.querySelector("#annotate-image-replace");
   const annotateImageDelete = root.querySelector("#annotate-image-delete");
+
+  // Collapsible annotation list state (persists across re-renders)
+  let annotationListExpanded = false;
+
+  // Text annotation controls (font size + text color). editor.html intentionally
+  // does not hardcode #annotate-font-size (css-classes static guard), so we
+  // create the controls here when absent and reuse them when present.
+  const TEXT_SIZES = [8, 10, 12, 14, 16, 18, 24, 36, 48, 72];
+  const TEXT_COLORS = [
+    "#000000", "#ffffff", "#ff0000", "#0066ff", "#00aa00", "#ff8800", "#aa00aa", "#00aaaa",
+  ];
+
+  // Markup color dots (five dots, new order). Hardcoded in editor.html; created
+  // here when the container is empty (e.g. smoke-test fake DOM).
+  const MARKUP_COLORS = ["#d92d20", "#0f0f12", "#0d44e8", "#ffe14d", "#6bbf6b"];
+  const MARKUP_COLOR_NAMES = {
+    "#d92d20": "Red",
+    "#0f0f12": "Black",
+    "#0d44e8": "Blue",
+    "#ffe14d": "Yellow",
+    "#6bbf6b": "Green",
+  };
+
+  function segmentIconName(style) {
+    return style === "highlight" ? "highlighter" : style === "underline" ? "underline" : "strikethrough";
+  }
+
+  // Ensure the markup style segments exist. panel.js creates them when the
+  // container is empty; editor.html hardcodes them. Returns the segment buttons.
+  function ensureMarkupSegments() {
+    if (!annotateMarkupStyleGroup) return [];
+    const existing = annotateMarkupSegments();
+    if (existing.length) return existing;
+    MARKUP_STYLES.forEach((style) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `ds-segment annotate-markup-segment`;
+      btn.dataset.style = style;
+      btn.setAttribute("role", "radio");
+      btn.setAttribute("aria-checked", style === DEFAULT_MARKUP_STYLE ? "true" : "false");
+      btn.setAttribute("aria-label", style.charAt(0).toUpperCase() + style.slice(1));
+      const icon = document.createElement("i");
+      icon.setAttribute("data-icon", segmentIconName(style));
+      btn.appendChild(icon);
+      annotateMarkupStyleGroup.appendChild(btn);
+    });
+    return annotateMarkupSegments();
+  }
+
+  // Ensure the markup color dots exist (see ensureMarkupSegments).
+  function ensureMarkupColorSwatches() {
+    if (!annotateMarkupColors) return [];
+    const existing = annotateMarkupColorSwatches();
+    if (existing.length) return existing;
+    MARKUP_COLORS.forEach((color) => {
+      const swatch = document.createElement("button");
+      swatch.type = "button";
+      swatch.className = "ds-color-swatch annotate-color-dot";
+      swatch.dataset.color = color;
+      swatch.setAttribute("aria-checked", "false");
+      swatch.setAttribute("aria-label", `${MARKUP_COLOR_NAMES[color]} color`);
+      swatch.setAttribute("title", MARKUP_COLOR_NAMES[color]);
+      swatch.style.backgroundColor = color;
+      swatch.style.borderColor = "var(--color-border-input)";
+      annotateMarkupColors.appendChild(swatch);
+    });
+    return annotateMarkupColorSwatches();
+  }
+
+  function createFontSizeField() {
+    const field = document.createElement("div");
+    field.className = "ds-form-field annotate-font-size-field";
+    field.id = "annotate-font-size-field";
+    const label = document.createElement("label");
+    label.className = "ds-field-label ds-sr-only";
+    label.textContent = "Size";
+    label.setAttribute("for", "annotate-font-size");
+    const select = document.createElement("select");
+    select.id = "annotate-font-size";
+    select.className = "ds-input";
+    for (const size of TEXT_SIZES) {
+      const o = document.createElement("option");
+      o.value = String(size);
+      o.textContent = String(size);
+      select.appendChild(o);
+    }
+    field.appendChild(label);
+    field.appendChild(select);
+    return field;
+  }
+
+  function createTextColorField() {
+    const field = document.createElement("div");
+    field.className = "ds-form-field annotate-text-color-field";
+    field.id = "annotate-text-color-field";
+    const label = document.createElement("label");
+    label.className = "ds-field-label ds-sr-only";
+    label.textContent = "Color";
+    label.setAttribute("for", "annotate-text-colors");
+    const group = document.createElement("div");
+    group.className = "ds-color-swatch-group annotate-text-colors";
+    group.id = "annotate-text-colors";
+    group.setAttribute("role", "group");
+    group.setAttribute("aria-label", "Text color");
+    for (const color of TEXT_COLORS) {
+      const swatch = document.createElement("button");
+      swatch.type = "button";
+      swatch.className = "ds-color-swatch";
+      swatch.dataset.color = color;
+      swatch.setAttribute("aria-checked", "false");
+      group.appendChild(swatch);
+    }
+    field.appendChild(label);
+    field.appendChild(group);
+    return field;
+  }
+
+  // Text controls live inside the text group; fall back to the panel section
+  // when the text-controls container is absent (older markup).
+  const textControlsTarget = annotateTextControls || annotatePanelSection;
+  if (!root.querySelector("#annotate-font-size")) textControlsTarget.appendChild(createFontSizeField());
+  if (!root.querySelector("#annotate-text-colors")) textControlsTarget.appendChild(createTextColorField());
+
+  const annotateFontSize = root.querySelector("#annotate-font-size");
+  const annotateTextColorGroup = root.querySelector("#annotate-text-colors");
 
   const watermarkColorSwatches = () => root.querySelectorAll('[name="watermark-color"]');
 
@@ -107,57 +245,87 @@ export function mountPanel(root, opts = {}) {
   });
 
   // Annotate panel event listeners
-  if (annotateFontSize) {
-    annotateFontSize.innerHTML = [8, 10, 12, 14, 16, 18, 24, 36, 48, 72].map(
-      (s) => `<option value="${s}"${s === DEFAULT_TEXT_FONT_SIZE ? " selected" : ""}>${s} pt</option>`
-    ).join("");
-    annotateFontSize.addEventListener("change", () => {
+
+  // Markup style segmented radiogroup (icon-only)
+  if (annotateMarkupStyleGroup) {
+    const applyStyle = (style) => {
       const state = getState?.();
-      // Update store setting for new annotations
-      store?.patch({ annotateFontSize: Number(annotateFontSize.value) });
-      // Update selected annotation if any
+      // If a mark is selected, restyle it in place: keep its other attributes,
+      // clamp thickness to the new style's range, a single undo entry, then
+      // re-render. Otherwise set the active style for new marks.
       if (state && state.annotateSelectedAnnotationId && state.annotateSelectedPageId) {
-        updateAnnotations((anns) => {
-          const pageAnns = getPageAnnotations(anns, state.annotateSelectedPageId);
-          const ann = pageAnns.find((a) => a.id === state.annotateSelectedAnnotationId);
-          if (ann && ann.type === "text") {
-            return updateAnnotation(anns, state.annotateSelectedPageId, state.annotateSelectedAnnotationId, { fontSize: Number(annotateFontSize.value) });
-          }
-          return anns;
-        });
+        const ann = getPageAnnotations(state.annotations, state.annotateSelectedPageId).find(
+          (a) => a.id === state.annotateSelectedAnnotationId,
+        );
+        if (ann) {
+          const thickness =
+            style === "highlight"
+              ? undefined
+              : Math.max(
+                  MARKUP_THICKNESS_MIN,
+                  Math.min(MARKUP_THICKNESS_MAX, Number(ann.thickness ?? DEFAULT_MARKUP_THICKNESS)),
+                );
+          updateAnnotations((anns) =>
+            updateAnnotation(anns, state.annotateSelectedPageId, state.annotateSelectedAnnotationId, {
+              style,
+              thickness,
+            }),
+          );
+        }
+      } else {
+        store?.patch({ annotateMarkupStyle: style });
       }
+    };
+    // Ensure segments exist (created here when the container is empty), then
+    // attach direct listeners (the fake DOM used by tests does not bubble).
+    ensureMarkupSegments().forEach((btn) => {
+      btn.addEventListener("click", () => {
+        annotateMarkupSegments().forEach((b) => b.setAttribute("aria-checked", String(b === btn)));
+        applyStyle(btn.dataset.style);
+      });
+      btn.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          annotateMarkupSegments().forEach((b) => b.setAttribute("aria-checked", String(b === btn)));
+          applyStyle(btn.dataset.style);
+        }
+      });
     });
   }
 
-  annotateHighlightColorSwatches().forEach((swatch) => {
+  // Markup color swatches — write to the per-style store key for the current style
+  ensureMarkupColorSwatches().forEach((swatch) => {
     swatch.addEventListener("click", () => {
-      annotateHighlightColorSwatches().forEach((s) => s.setAttribute("aria-checked", "false"));
+      annotateMarkupColorSwatches().forEach((s) => s.setAttribute("aria-checked", "false"));
       swatch.setAttribute("aria-checked", "true");
       const color = swatch.dataset.color;
-      // Update store setting for new annotations
-      store?.patch({ annotateHighlightColor: color });
-      // Update selected annotation if any
       const state = getState?.();
+      const style = state?.annotateMarkupStyle ?? DEFAULT_MARKUP_STYLE;
+      const key = style === "underline" ? "annotateMarkupUnderlineColor"
+        : style === "strikethrough" ? "annotateMarkupStrikethroughColor"
+        : "annotateHighlightColor";
+      store?.patch({ [key]: color });
+      // Update selected annotation if any
       if (state && state.annotateSelectedAnnotationId && state.annotateSelectedPageId) {
         updateAnnotations((anns) => updateAnnotation(anns, state.annotateSelectedPageId, state.annotateSelectedAnnotationId, { color }));
       }
     });
   });
 
-  annotateTextColorSwatches().forEach((swatch) => {
-    swatch.addEventListener("click", () => {
-      annotateTextColorSwatches().forEach((s) => s.setAttribute("aria-checked", "false"));
-      swatch.setAttribute("aria-checked", "true");
-      const color = swatch.dataset.color;
-      // Update store setting for new annotations
-      store?.patch({ annotateTextColor: color });
-      // Update selected annotation if any
+  // Thickness slider (only meaningful for underline/strikethrough)
+  if (annotateThickness) {
+    annotateThickness.addEventListener("input", () => {
       const state = getState?.();
+      const style = state?.annotateMarkupStyle ?? DEFAULT_MARKUP_STYLE;
+      if (style === "highlight") return;
+      const thickness = Number(annotateThickness.value);
+      const key = style === "underline" ? "annotateMarkupUnderlineThickness" : "annotateMarkupStrikethroughThickness";
+      store?.patch({ [key]: thickness });
       if (state && state.annotateSelectedAnnotationId && state.annotateSelectedPageId) {
-        updateAnnotations((anns) => updateAnnotation(anns, state.annotateSelectedPageId, state.annotateSelectedAnnotationId, { color }));
+        updateAnnotations((anns) => updateAnnotation(anns, state.annotateSelectedPageId, state.annotateSelectedAnnotationId, { thickness }));
       }
     });
-  });
+  }
 
   if (annotateOpacity) {
     annotateOpacity.addEventListener("input", () => {
@@ -169,6 +337,63 @@ export function mountPanel(root, opts = {}) {
       if (state && state.annotateSelectedAnnotationId && state.annotateSelectedPageId) {
         updateAnnotations((anns) => updateAnnotation(anns, state.annotateSelectedPageId, state.annotateSelectedAnnotationId, { opacity }));
       }
+    });
+  }
+
+  // Font size: one undo per change. Edits the selected text annotation when a
+  // text mark is selected, otherwise sets the store default for new text marks.
+  if (annotateFontSize) {
+    annotateFontSize.addEventListener("change", () => {
+      const size = Number(annotateFontSize.value);
+      const state = getState?.();
+      if (
+        state &&
+        state.annotateSelectedAnnotationId &&
+        state.annotateSelectedPageId
+      ) {
+        const sel = getPageAnnotations(state.annotations || {}, state.annotateSelectedPageId).find(
+          (a) => a.id === state.annotateSelectedAnnotationId,
+        );
+        if (sel && sel.type === "text") {
+          updateAnnotations((anns) =>
+            updateAnnotation(anns, state.annotateSelectedPageId, state.annotateSelectedAnnotationId, {
+              fontSize: size,
+            }),
+          );
+          return;
+        }
+      }
+      store?.patch({ annotateFontSize: size });
+    });
+  }
+
+  // Text color dots: one undo per change. Edits the selected text annotation or
+  // sets the store default for new text marks.
+  if (annotateTextColorGroup) {
+    const setTextColor = (color) => {
+      const state = getState?.();
+      if (state && state.annotateSelectedAnnotationId && state.annotateSelectedPageId) {
+        const sel = getPageAnnotations(state.annotations || {}, state.annotateSelectedPageId).find(
+          (a) => a.id === state.annotateSelectedAnnotationId,
+        );
+        if (sel && sel.type === "text") {
+          updateAnnotations((anns) =>
+            updateAnnotation(anns, state.annotateSelectedPageId, state.annotateSelectedAnnotationId, {
+              color,
+            }),
+          );
+          return;
+        }
+      }
+      store?.patch({ annotateTextColor: color });
+    };
+    annotateTextColorGroup.querySelectorAll(".ds-color-swatch").forEach((swatch) => {
+      swatch.addEventListener("click", () => {
+        annotateTextColorGroup.querySelectorAll(".ds-color-swatch").forEach((s) =>
+          s.setAttribute("aria-checked", String(s === swatch)),
+        );
+        setTextColor(swatch.dataset.color);
+      });
     });
   }
 
@@ -650,13 +875,19 @@ export function mountPanel(root, opts = {}) {
 
         if (currentPageId) {
           const pageIndex = state.pages.findIndex((p) => p.id === currentPageId) + 1;
-          annotateHint.textContent = currentTool === "select"
-            ? `${getAnnotationCount(state.annotations || {}, currentPageId)} annotation(s) — click to select, drag to move, Del to delete`
-            : currentTool === "text"
-              ? "Click on the page to add a text box. Type, then press Enter or click away to commit. Esc to cancel."
-              : currentTool === "highlight"
-                ? "Drag on the page to create a highlight. Click away or press Esc to cancel."
-                : "Choose an image to insert on this page.";
+          // Announce selection changes for screen readers
+          if (annotateAriaLive) {
+            const count = getAnnotationCount(state.annotations || {}, currentPageId);
+            annotateAriaLive.textContent = currentTool === "select"
+              ? selectedAnnotationId
+                ? "Annotation selected"
+                : `${count} annotation(s) on this page`
+              : currentTool === "text"
+                ? "Text tool"
+                : currentTool === "highlight"
+                  ? "Markup tool"
+                  : "Image tool";
+          }
 
           // Find the selected annotation object (if any) so the panel shows its
           // own values rather than the store defaults for new annotations.
@@ -666,15 +897,29 @@ export function mountPanel(root, opts = {}) {
             selectedAnnotation = pageAnns.find((a) => a.id === state.annotateSelectedAnnotationId);
           }
 
-          // Show/hide option groups: match the active tool OR the selected
-          // annotation's type (a selected highlight shows highlight options even
-          // when the tool is "select", and vice versa).
-          const showHighlight = currentTool === "highlight" || selectedAnnotation?.type === "highlight";
-          const showText = currentTool === "text" || selectedAnnotation?.type === "text";
-          const showImage = currentTool === "image" || selectedAnnotation?.type === "image";
-          if (annotateHighlightOptions) annotateHighlightOptions.hidden = !showHighlight;
-          if (annotateTextOptions) annotateTextOptions.hidden = !showText;
-          if (annotateImageOptions) annotateImageOptions.hidden = !showImage;
+          const style = state.annotateMarkupStyle ?? DEFAULT_MARKUP_STYLE;
+          // Exactly one group at a time. The selected annotation's type wins over
+          // the active tool; select + nothing selected shows the empty state.
+          let showMarkup = false;
+          let showText = false;
+          let showImage = false;
+          if (selectedAnnotation) {
+            if (selectedAnnotation.type === "highlight") showMarkup = true;
+            else if (selectedAnnotation.type === "text") showText = true;
+            else if (selectedAnnotation.type === "image") showImage = true;
+          } else {
+            if (currentTool === "highlight") showMarkup = true;
+            else if (currentTool === "text") showText = true;
+            else if (currentTool === "image") showImage = true;
+          }
+          if (annotateGroupMarkup) annotateGroupMarkup.hidden = !showMarkup;
+          if (annotateGroupText) annotateGroupText.hidden = !showText;
+          if (annotateGroupImage) annotateGroupImage.hidden = !showImage;
+          // Empty state: select tool with nothing selected
+          if (annotateEmpty) annotateEmpty.hidden = !(currentTool === "select" && !selectedAnnotation);
+          // Thickness slider only for underline/strikethrough; opacity slider only for highlight
+          if (annotateThicknessField) annotateThicknessField.hidden = style === "highlight";
+          if (annotateOpacityField) annotateOpacityField.hidden = style !== "highlight";
           // The shared opacity slider drives the selected annotation's opacity
           // (highlight or image); hide it while image options are shown so only
           // the image-specific slider is visible.
@@ -684,33 +929,24 @@ export function mountPanel(root, opts = {}) {
           // the store defaults (panelControlValues is pure, in annotations.js).
           const values = panelControlValues(state, selectedAnnotation);
 
-          // Update color swatches for highlight
-          const highlightColor = values.highlightColor;
-          annotateHighlightColorSwatches().forEach((swatch) => {
-            swatch.setAttribute("aria-checked", String(swatch.dataset.color === highlightColor));
+          // Update markup style segments
+          if (annotateMarkupStyleGroup) {
+            annotateMarkupSegments().forEach((btn) => {
+              const active = btn.dataset.style === values.markupStyle;
+              btn.setAttribute("aria-checked", String(active));
+              btn.classList.toggle("ds-segment--active", active);
+            });
+          }
+
+          // Update markup color swatches
+          const markupColor = values.highlightColor;
+          annotateMarkupColorSwatches().forEach((swatch) => {
+            swatch.setAttribute("aria-checked", String(swatch.dataset.color === markupColor));
           });
 
-          // Update color swatches for text
-          const textColor = values.textColor;
-          annotateTextColorSwatches().forEach((swatch) => {
-            swatch.setAttribute("aria-checked", String(swatch.dataset.color === textColor));
-          });
-
-          // Update font size; guarantee the select contains the value even if
-          // it is not one of the preset options.
-          if (annotateFontSize) {
-            annotateFontSize.value = String(values.fontSize);
-            if (annotateFontSize.value !== String(values.fontSize)) {
-              const options = annotateFontSize.options || [];
-              const exists = options.some((o) => o.value === String(values.fontSize));
-              if (!exists) {
-                const option = document.createElement("option");
-                option.value = String(values.fontSize);
-                option.textContent = `${values.fontSize} pt`;
-                annotateFontSize.appendChild(option);
-              }
-              annotateFontSize.value = String(values.fontSize);
-            }
+          // Update thickness slider
+          if (annotateThickness) {
+            annotateThickness.value = String(values.markupThickness ?? DEFAULT_MARKUP_THICKNESS);
           }
 
           // Update opacity
@@ -729,6 +965,19 @@ export function mountPanel(root, opts = {}) {
           if (annotateImageReplace) annotateImageReplace.hidden = !isImageSelected;
           if (annotateImageDelete) annotateImageDelete.hidden = !isImageSelected;
 
+          // Text controls: font size preset + text color dots, shown for the
+          // text tool or a selected text annotation.
+          const annotateFontSizeField = root.querySelector("#annotate-font-size-field");
+          const annotateTextColorField = root.querySelector("#annotate-text-color-field");
+          if (annotateFontSizeField) annotateFontSizeField.hidden = !showText;
+          if (annotateTextColorField) annotateTextColorField.hidden = !showText;
+          if (annotateFontSize) annotateFontSize.value = String(values.fontSize);
+          if (annotateTextColorGroup) {
+            annotateTextColorGroup.querySelectorAll(".ds-color-swatch").forEach((s) => {
+              s.setAttribute("aria-checked", String(s.dataset.color === values.textColor));
+            });
+          }
+
           // Show/hide delete button
           if (annotateDeleteBtn) {
             annotateDeleteBtn.hidden = !selectedAnnotationId;
@@ -738,11 +987,16 @@ export function mountPanel(root, opts = {}) {
           if (annotateAnnotationList) {
             annotateAnnotationList.innerHTML = "";
             const anns = getPageAnnotations(state.annotations || {}, currentPageId);
+
+            const itemsWrap = document.createElement("div");
+            itemsWrap.id = "annotate-annotation-list-items";
+            itemsWrap.hidden = !annotationListExpanded;
+
             if (anns.length === 0) {
               const empty = document.createElement("div");
               empty.className = "ds-sr-only";
               empty.textContent = "No annotations on this page";
-              annotateAnnotationList.appendChild(empty);
+              itemsWrap.appendChild(empty);
             } else {
               for (const ann of anns) {
                 const item = document.createElement("button");
@@ -763,7 +1017,8 @@ export function mountPanel(root, opts = {}) {
                 } else if (ann.type === "image") {
                   label.textContent = `Image ${Math.round(ann.width || 0)}×${Math.round(ann.height || 0)} pt`;
                 } else {
-                  label.textContent = `Highlight ${Math.round(ann.width)}×${Math.round(ann.height)} pt`;
+                  const styleName = ann.style === "underline" ? "Underline" : ann.style === "strikethrough" ? "Strikethrough" : "Highlight";
+                  label.textContent = `${styleName} ${Math.round(ann.width)}×${Math.round(ann.height)} pt`;
                 }
                 item.appendChild(label);
 
@@ -780,9 +1035,26 @@ export function mountPanel(root, opts = {}) {
                 });
 
                 hydrateIcons(item);
-                annotateAnnotationList.appendChild(item);
+                itemsWrap.appendChild(item);
               }
             }
+
+            const header = document.createElement("button");
+            header.type = "button";
+            header.id = "annotate-annotation-header";
+            header.className = "annotate-annotation-header";
+            header.setAttribute("role", "button");
+            header.setAttribute("aria-expanded", String(annotationListExpanded));
+            header.textContent = `${anns.length} on this page`;
+            header.hidden = anns.length === 0;
+            header.addEventListener("click", () => {
+              annotationListExpanded = !annotationListExpanded;
+              header.setAttribute("aria-expanded", String(annotationListExpanded));
+              itemsWrap.hidden = !annotationListExpanded;
+            });
+
+            annotateAnnotationList.appendChild(header);
+            annotateAnnotationList.appendChild(itemsWrap);
           }
         }
       }

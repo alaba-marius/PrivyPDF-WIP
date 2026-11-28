@@ -139,6 +139,15 @@ const PAIRS = [
     '--color-studio-black',
   ],
   ['--color-danger on white', '--color-danger', WHITE],
+  // Markup color dots (editor.html): white text over each dot where it meets
+  // WCAG AA 4.5:1. Yellow and green dots are too light for white text, so they
+  // use black text instead (listed below). All five dots have at least one
+  // passing text color.
+  ['White on Red dot (#d92d20)', WHITE, '#d92d20'],
+  ['White on Black dot (#0f0f12)', WHITE, '#0f0f12'],
+  ['White on Blue dot (#0d44e8)', WHITE, '#0d44e8'],
+  ['Black on Yellow dot (#ffe14d)', '#000000', '#ffe14d'],
+  ['Black on Green dot (#6bbf6b)', '#000000', '#6bbf6b'],
 ];
 
 let failures = 0;

@@ -38,6 +38,11 @@ function makePDFLib() {
       },
       getWidth: () => 612,
       getHeight: () => 792,
+      // The copied page's own box — real pdf-lib reports MediaBox/CropBox as
+      // {x, y, width, height}; store pages carry no visible-box origin, so this
+      // defaults to {0, 0}; the exporter reads the output page, never the store record.
+      getMediaBox: () => ({ x: 0, y: 0, width: 612, height: 792 }),
+      getCropBox: () => ({ x: 0, y: 0, width: 612, height: 792 }),
       doc, // reference to the document for embedFont
     };
   }
@@ -109,6 +114,7 @@ function makePDFLib() {
     degrees: (angle) => ({ angle }),
     StandardFonts: { Helvetica: "Helvetica", HelveticaBold: "Helvetica-Bold" },
     rgb: (...components) => components,
+    BlendMode: { Multiply: "Multiply", Screen: "Screen" },
     async embedJpg(bytes) {
       ops.push(["embedJpg", bytes.length]);
       return {};
@@ -671,6 +677,72 @@ test("exportPages uses custom highlight color and opacity", async (t) => {
   assert.equal(rects[0].opacity, 0.7);
 });
 
+test("exportPages applies blendMode Multiply and default opacity 0.7 to highlight bands", async (t) => {
+  const PDFLib = makePDFLib();
+  const exporter = createExporter({ PDFLib });
+  const pages = [{ id: "p1", sourceId: "s1", index: 0, rotated: 0 }];
+  const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 1 }]]);
+  await exporter.exportPages({
+    pages, getSource: (id) => sources.get(id), fileName: "x",
+    exportMode: "all", selected: new Set(),
+    annotations: {
+      p1: [
+        { id: "h1", type: "highlight", x: 100, y: 100, width: 200, height: 50, color: "#ffe14d", style: "highlight" },
+      ],
+    },
+  });
+  const rects = drawnRects(PDFLib);
+  assert.equal(rects.length, 1);
+  assert.equal(rects[0].blendMode, "Multiply", "highlight band uses Multiply blend mode");
+  assert.equal(rects[0].opacity, 0.7, "highlight defaults to DEFAULT_HIGHLIGHT_OPACITY (0.7)");
+});
+
+test("exportPages does not apply blendMode to non-highlight markup", async (t) => {
+  const PDFLib = makePDFLib();
+  const exporter = createExporter({ PDFLib });
+  const pages = [{ id: "p1", sourceId: "s1", index: 0, rotated: 0 }];
+  const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 1 }]]);
+  await exporter.exportPages({
+    pages, getSource: (id) => sources.get(id), fileName: "x",
+    exportMode: "all", selected: new Set(),
+    annotations: {
+      p1: [
+        { id: "u1", type: "highlight", x: 100, y: 100, width: 200, height: 6, color: "#000000", style: "underline", opacity: 0.5 },
+      ],
+    },
+  });
+  const rects = drawnRects(PDFLib);
+  assert.equal(rects.length, 1);
+  assert.equal(rects[0].blendMode, undefined, "underline band does not get a blend mode");
+  assert.equal(rects[0].opacity, 0.5);
+});
+
+test("exportPages reads the visible-box origin from the output page, not the store record", async (t) => {
+  const PDFLib = makePDFLib();
+  const exporter = createExporter({ PDFLib });
+  // Store pages never carry a visible-box origin (`view` is viewer-only and is
+  // absent from the store model). The exporter reads the output page's own box,
+  // which for store-sourced pages starts at {0, 0}, so stored page-space
+  // coordinates are drawn unshifted — nothing is compensated twice.
+  const pages = [{ id: "p1", sourceId: "s1", index: 0, rotated: 0, view: [36, 36, 576, 756], width: 612, height: 792 }];
+  const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 1 }]]);
+  await exporter.exportPages({
+    pages, getSource: (id) => sources.get(id), fileName: "x",
+    exportMode: "all", selected: new Set(),
+    annotations: {
+      p1: [
+        { id: "h1", type: "highlight", x: 100, y: 100, width: 200, height: 50, color: "#ffe14d", style: "highlight" },
+      ],
+    },
+  });
+  const rects = drawnRects(PDFLib);
+  assert.equal(rects.length, 1);
+  assert.equal(rects[0].x, 100, "not shifted by the store record's view");
+  assert.equal(rects[0].y, 100, "not shifted by the store record's view");
+  assert.equal(rects[0].width, 200);
+  assert.equal(rects[0].height, 50);
+});
+
 test("exportPages does not draw empty text annotations", async (t) => {
   const PDFLib = makePDFLib();
   const exporter = createExporter({ PDFLib });
@@ -913,4 +985,81 @@ test("exportPages skips image annotation with a missing asset", async (t) => {
   });
   assert.deepStrictEqual(drawnImages(PDFLib), []);
   assert.deepStrictEqual(embedCalls(PDFLib), []);
+});
+
+// --- Markup style exporter tests ---
+
+test("exportPages draws underline annotation as a band via markupLineRect (dir 0)", async (t) => {
+  const PDFLib = makePDFLib();
+  const exporter = createExporter({ PDFLib });
+  const pages = [{ id: "p1", sourceId: "s1", index: 0, rotated: 0 }];
+  const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 1 }]]);
+  await exporter.exportPages({
+    pages, getSource: (id) => sources.get(id), fileName: "x",
+    exportMode: "all", selected: new Set(),
+    annotations: {
+      p1: [
+        { id: "u1", type: "highlight", style: "underline", x: 100, y: 100, width: 200, height: 50, dir: 0, thickness: 2, color: "#d92d20", opacity: 1 },
+      ],
+    },
+  });
+  const rects = drawnRects(PDFLib);
+  assert.equal(rects.length, 1);
+  const rect = rects[0];
+  // edge = 100 + 0.11 * 50 = 105.5; bandBottom = 105.5 - 2 = 103.5
+  assert.equal(rect.x, 100);
+  assert.equal(rect.y, 103.5);
+  assert.equal(rect.width, 200);
+  assert.equal(rect.height, 2);
+  assert.deepStrictEqual(rect.color, [0.8509803921568627, 0.17647058823529413, 0.12549019607843137]); // #d92d20
+  assert.equal(rect.opacity, 1);
+});
+
+test("exportPages draws strikethrough annotation as a band via markupLineRect (dir 0)", async (t) => {
+  const PDFLib = makePDFLib();
+  const exporter = createExporter({ PDFLib });
+  const pages = [{ id: "p1", sourceId: "s1", index: 0, rotated: 0 }];
+  const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 1 }]]);
+  await exporter.exportPages({
+    pages, getSource: (id) => sources.get(id), fileName: "x",
+    exportMode: "all", selected: new Set(),
+    annotations: {
+      p1: [
+        { id: "s1", type: "highlight", style: "strikethrough", x: 100, y: 100, width: 200, height: 50, dir: 0, thickness: 2, color: "#d92d20", opacity: 1 },
+      ],
+    },
+  });
+  const rects = drawnRects(PDFLib);
+  assert.equal(rects.length, 1);
+  const rect = rects[0];
+  // edge = 100 + 0.45 * 50 = 122.5; bandStart = 122.5 - 1 = 121.5
+  assert.equal(rect.x, 100);
+  assert.equal(rect.y, 121.5);
+  assert.equal(rect.width, 200);
+  assert.equal(rect.height, 2);
+  assert.equal(rect.opacity, 1);
+});
+
+test("exportPages draws underline annotation at rotation 90 uses page-space rect directly", async (t) => {
+  const PDFLib = makePDFLib();
+  const exporter = createExporter({ PDFLib });
+  const pages = [{ id: "p1", sourceId: "s1", index: 0, rotated: 90 }];
+  const sources = new Map([["s1", { kind: "pdf", bytes: new Uint8Array([1]), type: "application/pdf", size: 1, pageCount: 1 }]]);
+  await exporter.exportPages({
+    pages, getSource: (id) => sources.get(id), fileName: "x",
+    exportMode: "all", selected: new Set(),
+    annotations: {
+      p1: [
+        { id: "u1", type: "highlight", style: "underline", x: 100, y: 100, width: 200, height: 50, dir: 0, thickness: 2, color: "#d92d20", opacity: 1 },
+      ],
+    },
+  });
+  const rects = drawnRects(PDFLib);
+  assert.equal(rects.length, 1);
+  const rect = rects[0];
+  // No rotation transform: page-space rect used directly
+  assert.equal(rect.x, 100);
+  assert.equal(rect.y, 103.5);
+  assert.equal(rect.width, 200);
+  assert.equal(rect.height, 2);
 });

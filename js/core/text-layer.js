@@ -9,6 +9,8 @@
 // render window and never blocks pointer handling — if the layer is not
 // ready when the pointer goes down, the drag falls back to a free rectangle.
 
+import { pageBoxOrigin } from "./overlay.js";
+
 // Characters treated as narrow when splitting a TextItem's width across its
 // glyphs. pdf.js reports one width per item; we apportion it across the
 // item's characters with these weights so the per-character widths always
@@ -164,6 +166,13 @@ export async function extractPageText(pdfjsPage) {
   const items = content.items || [];
   const segments = [];
 
+  // pdf.js text items are in the page's absolute user space (MediaBox origin,
+  // y up). The viewer works in visible-box space (CropBox ∩ MediaBox, origin
+  // bottom-left), which is the same space annotations live in. Subtract the
+  // visible-box origin so text boxes line up with annotations. For store
+  // pages (no .view) the origin is {0, 0}, a no-op for the common case.
+  const origin = pageBoxOrigin(pdfjsPage);
+
   for (const item of items) {
     const [a, b, c, d, e, f] = item.transform;
     // Direction of the text run from the transform, snapped to right angles.
@@ -179,11 +188,12 @@ export async function extractPageText(pdfjsPage) {
     if (!str) continue;
 
     // Font height: |d| for horizontal text; for vertical text d is 0 so fall
-    // back to the item's reported height.
+    // back to the item's reported height. This is per-font (per item), so the
+    // line box ascent/descent scale with the actual font metrics.
     const fontHeight = Math.abs(d) || Number(item.height) || 0;
     if (!fontHeight) continue;
 
-    const box = segmentBox(snapped, e, f, width, fontHeight);
+    const box = segmentBox(snapped, e - origin.x, f - origin.y, width, fontHeight);
     box.chars = splitWidth(str, width, box.start);
     segments.push(box);
   }

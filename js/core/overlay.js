@@ -37,6 +37,21 @@ export function visualDims(pageW, pageH, rotation) {
   return { visualW: pageW, visualH: pageH };
 }
 
+// Origin of the visible page box (CropBox ∩ MediaBox) in page space, i.e. the
+// offset from the page's absolute user space to the visible box the viewer
+// works in. A pdf.js page exposes its visible box via .view = [x1, y1, x2, y2];
+// the lower-left corner is the origin. Our store page model anchors the
+// visible box at the bottom-left of page space, so store pages report {0, 0}.
+//
+// shortcut: store pages carry no .view, so crop-origin offsets are a no-op
+// unless the store page records its visible-box origin.
+export function pageBoxOrigin(page) {
+  if (page && Array.isArray(page.view)) {
+    return { x: page.view[0], y: page.view[1] };
+  }
+  return { x: 0, y: 0 };
+}
+
 // Visual anchor (vx, vy) in visual space (origin bottom-left, y up).
 // position: one of LABEL_POSITIONS.
 // textWidth: width of the text in points.

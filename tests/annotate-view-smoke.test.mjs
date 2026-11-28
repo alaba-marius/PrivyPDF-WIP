@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { globSync } from "node:fs";
 import { createStore } from "../js/core/store.js";
-import { addAnnotation, createHighlightAnnotation, createImageAnnotation, createTextAnnotation } from "../js/core/annotations.js";
+import { addAnnotation, createHighlightAnnotation, createImageAnnotation, createTextAnnotation, DEFAULT_MARKUP_THICKNESS, DEFAULT_MARKUP_STYLE } from "../js/core/annotations.js";
 import { mountAnnotateView } from "../js/ui/annotate-view.js";
 import { textLayerCache } from "../js/core/text-layer.js";
 import { mountPanel } from "../js/ui/panel.js";
@@ -122,8 +122,11 @@ class FakeElement {
         "page-number-margin", "page-number-apply-to", "watermark-enabled",
         "watermark-size-mode", "watermark-fixed-size", "meta-subject",
         "meta-keywords", "meta-clear", "split-summary", "split-ranges-error",
-        "annotate-panel-section", "annotate-panel-hint", "annotate-highlight-options",
-        "annotate-text-options", "annotate-font-size", "annotate-opacity",
+        "annotate-panel-section", "annotate-panel-hint", "annotate-markup-style",
+        "annotate-markup-colors", "annotate-thickness-field", "annotate-thickness",
+        "annotate-opacity-field", "annotate-opacity", "annotate-image-options",
+        "annotate-image-opacity", "annotate-image-keep-proportions",
+        "annotate-image-choose", "annotate-image-replace", "annotate-image-delete",
         "annotate-panel-delete", "annotate-annotation-list",
       ];
       for (const id of elementIds) {
@@ -1792,10 +1795,48 @@ const PANEL_HTML = `
   <span id="split-ranges-error" hidden></span>
   <div id="annotate-panel-section" hidden>
     <span id="annotate-panel-hint"></span>
-    <div id="annotate-highlight-options" hidden></div>
-    <div id="annotate-text-options" hidden></div>
-    <select id="annotate-font-size"></select>
-    <input id="annotate-opacity" type="range" min="0" max="100" value="40">
+    <div class="ds-form-field">
+      <label class="ds-field-label" for="annotate-markup-style">Style</label>
+      <div class="ds-segmented annotate-markup-style-group" id="annotate-markup-style" role="radiogroup" aria-label="Markup style">
+        <button class="ds-segment annotate-markup-segment" data-style="highlight" aria-checked="true" role="radio" aria-label="Highlight"><i data-icon="highlighter"></i><span>Highlight</span></button>
+        <button class="ds-segment annotate-markup-segment" data-style="underline" aria-checked="false" role="radio" aria-label="Underline"><i data-icon="underline"></i><span>Underline</span></button>
+        <button class="ds-segment annotate-markup-segment" data-style="strikethrough" aria-checked="false" role="radio" aria-label="Strikethrough"><i data-icon="strikethrough"></i><span>Strikethrough</span></button>
+      </div>
+    </div>
+    <div class="ds-form-field">
+      <label class="ds-field-label" for="annotate-markup-colors">Color</label>
+      <div class="ds-color-swatch-group annotate-markup-colors" id="annotate-markup-colors" role="group" aria-label="Markup color">
+        <button class="ds-color-swatch" data-color="#ffe14d" aria-checked="true"></button>
+        <button class="ds-color-swatch" data-color="#d92d20"></button>
+        <button class="ds-color-swatch" data-color="#0066ff"></button>
+        <button class="ds-color-swatch" data-color="#00aa00"></button>
+        <button class="ds-color-swatch" data-color="#6a0dad"></button>
+      </div>
+    </div>
+    <div class="ds-form-field annotate-thickness-field" id="annotate-thickness-field">
+      <label class="ds-field-label" for="annotate-thickness">Thickness</label>
+      <input class="ds-input" id="annotate-thickness" type="range" min="0.5" max="8" step="0.5" value="1.5" />
+    </div>
+    <div class="ds-form-field annotate-opacity-field" id="annotate-opacity-field">
+      <label class="ds-field-label" for="annotate-opacity">Opacity</label>
+      <input class="ds-input" id="annotate-opacity" type="range" min="0" max="100" value="40" />
+    </div>
+    <div class="annotate-image-options" id="annotate-image-options" hidden>
+      <p class="annotate-image-hint" id="annotate-image-hint">Insert image: choose an image to place on the page.</p>
+      <div class="ds-form-field">
+        <label class="ds-field-label" for="annotate-image-opacity">Opacity</label>
+        <input class="ds-input" id="annotate-image-opacity" type="range" min="5" max="100" value="100" />
+      </div>
+      <div class="ds-form-field">
+        <label class="ds-field-label" for="annotate-image-keep-proportions">Keep proportions</label>
+        <input id="annotate-image-keep-proportions" type="checkbox" checked />
+      </div>
+      <div class="ds-stack ds-stack--sm annotate-image-actions">
+        <button class="ds-btn ds-btn--sm" id="annotate-image-choose">Choose image</button>
+        <button class="ds-btn ds-btn--sm ds-btn--ghost" id="annotate-image-replace">Replace image</button>
+        <button class="ds-btn ds-btn--sm ds-btn--ghost" id="annotate-image-delete">Delete</button>
+      </div>
+    </div>
     <button id="annotate-panel-delete" hidden>Delete</button>
     <div id="annotate-annotation-list"></div>
   </div>
@@ -1921,9 +1962,8 @@ test("annotate-view + panel: real view and real panel share annotate state via t
     assert.equal(items[0].dataset.annotationId, "h1");
     assert.equal(panelRoot.querySelector("#annotate-panel-delete").hidden, false, "delete button shown when an annotation is selected");
 
-    const hint = panelRoot.querySelector("#annotate-panel-hint");
-    assert.ok(hint.textContent.includes("click to select"), "hint matches the select tool");
-    assert.equal(panelRoot.querySelector("#annotate-highlight-options").hidden, false, "highlight options show when a highlight is selected even with the select tool");
+    assert.equal(panelRoot.querySelector("#annotate-panel-delete").hidden, false, "delete button shown when an annotation is selected");
+    assert.equal(panelRoot.querySelector("#annotate-markup-style").hidden, false, "markup options show when a highlight is selected even with the select tool");
 
     // Panel list item click selects the annotation in the view
     items[0].dispatchEvent({ type: "click" });
@@ -1975,8 +2015,7 @@ test("annotate-view + panel: real view and real panel share annotate state via t
     await new Promise((r) => setTimeout(r, 10));
     panel.render(store.get());
     assert.equal(store.get().annotateCurrentTool, "highlight", "store holds the highlight tool");
-    assert.ok(panelRoot.querySelector("#annotate-panel-hint").textContent.includes("Drag on the page to create a highlight"), "hint follows the highlight tool");
-    assert.equal(panelRoot.querySelector("#annotate-highlight-options").hidden, false, "highlight options shown for the highlight tool");
+    assert.equal(panelRoot.querySelector("#annotate-markup-style").hidden, false, "markup options shown for the highlight tool");
 
     // Scrolling to page 2 publishes the new current page
     const pagesWrap = viewContainer.querySelector("#annotate-pages-wrap");
@@ -2346,7 +2385,7 @@ test("annotate-view smoke: highlight drag snaps to text lines, one bar per line,
       `rot ${rotation}: second line rect`);
     for (const h of highlights) {
       assert.equal(h.color, "#ffe14d", `rot ${rotation}: default highlight color`);
-      assert.equal(h.opacity, 0.4, `rot ${rotation}: default highlight opacity`);
+      assert.equal(h.opacity, 0.7, `rot ${rotation}: default highlight opacity`);
     }
 
     textLayerCache.clear();
@@ -2873,6 +2912,76 @@ test("annotate-view smoke: highlight preview bars are removed from the DOM on po
     textLayerCache.clear();
     view.destroy();
   }
+});
+
+test("annotate-view smoke: underline free drag creates underline annotation with style/thickness/dir 0", async () => {
+  const pages = [{ id: "p1", sourceId: "s1", index: 0, baseRotation: 0, rotated: 0, width: PAGE_W, height: PAGE_H }];
+  const view = await mountPointerView(pages);
+
+  view.store.patch({ annotateMarkupStyle: "underline" });
+  assert.equal(view.store.get().annotateMarkupStyle, "underline");
+
+  const highlightBtn = [...view.container.querySelectorAll(".annotate-tool")].find((b) => b.dataset.tool === "highlight");
+  assert.ok(highlightBtn, "highlight tool button");
+  highlightBtn.dispatchEvent({ type: "click" });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(view.store.get().annotateCurrentTool, "highlight", "tool is highlight");
+
+  const canvas = view.canvas;
+  const startX = 100, startY = 100;
+  const endX = 300, endY = 150;
+
+  view.fire.down(canvas, startX, startY);
+  view.fire.move(canvas, 200, 120);
+  view.fire.move(canvas, endX, endY);
+  await new Promise((r) => setTimeout(r, 10));
+  view.fire.up(canvas, endX, endY);
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(view.updateCallCount(), 1, "exactly one update action for underline drag");
+  const anns = (view.lastUpdatedAnns().p1 || []);
+  const underline = anns.find((a) => a.type === "highlight" && a.style === "underline");
+  assert.ok(underline, "one underline annotation created");
+  assert.equal(underline.style, "underline");
+  assert.equal(underline.dir, 0, "free drag uses dir 0");
+  assert.equal(underline.thickness, DEFAULT_MARKUP_THICKNESS, "uses default thickness");
+
+  view.destroy();
+});
+
+test("annotate-view smoke: strikethrough free drag creates strikethrough annotation with style/thickness/dir 0", async () => {
+  const pages = [{ id: "p1", sourceId: "s1", index: 0, baseRotation: 0, rotated: 0, width: PAGE_W, height: PAGE_H }];
+  const view = await mountPointerView(pages);
+
+  view.store.patch({ annotateMarkupStyle: "strikethrough" });
+  assert.equal(view.store.get().annotateMarkupStyle, "strikethrough");
+
+  const highlightBtn = [...view.container.querySelectorAll(".annotate-tool")].find((b) => b.dataset.tool === "highlight");
+  assert.ok(highlightBtn, "highlight tool button");
+  highlightBtn.dispatchEvent({ type: "click" });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(view.store.get().annotateCurrentTool, "highlight", "tool is highlight");
+
+  const canvas = view.canvas;
+  const startX = 100, startY = 100;
+  const endX = 300, endY = 150;
+
+  view.fire.down(canvas, startX, startY);
+  view.fire.move(canvas, 200, 120);
+  view.fire.move(canvas, endX, endY);
+  await new Promise((r) => setTimeout(r, 10));
+  view.fire.up(canvas, endX, endY);
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(view.updateCallCount(), 1, "exactly one update action for strikethrough drag");
+  const anns = (view.lastUpdatedAnns().p1 || []);
+  const strikethrough = anns.find((a) => a.type === "highlight" && a.style === "strikethrough");
+  assert.ok(strikethrough, "one strikethrough annotation created");
+  assert.equal(strikethrough.style, "strikethrough");
+  assert.equal(strikethrough.dir, 0, "free drag uses dir 0");
+  assert.equal(strikethrough.thickness, DEFAULT_MARKUP_THICKNESS, "uses default thickness");
+
+  view.destroy();
 });
 
 test("static guard: no tmp-* or scratch-* files under tests/ or the repo root", () => {

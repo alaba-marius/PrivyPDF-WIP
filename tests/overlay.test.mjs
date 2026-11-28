@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   pageToVisual, visualToPage, placeLabel, watermarkPlacement, watermarkAutoSize,
-  LABEL_POSITIONS, validateWatermark, formatPageNumber, DEFAULT_MARGIN,
+  LABEL_POSITIONS, validateWatermark, formatPageNumber, DEFAULT_MARGIN, pageBoxOrigin,
 } from "../js/core/overlay.js";
 
 const PAGE_W = 612;
@@ -475,3 +475,17 @@ for (const { pageW, pageH } of NON_SQUARE_PAGES) {
     }
   }
 }
+
+// --- pageBoxOrigin: visible box origin (CropBox ∩ MediaBox lower-left) ---
+
+test("pageBoxOrigin returns {0, 0} for a store page without a visible box", () => {
+  assert.deepStrictEqual(pageBoxOrigin({ id: "p1", index: 0, width: 612, height: 792 }), { x: 0, y: 0 });
+  assert.deepStrictEqual(pageBoxOrigin(undefined), { x: 0, y: 0 });
+  assert.deepStrictEqual(pageBoxOrigin(null), { x: 0, y: 0 });
+});
+
+test("pageBoxOrigin reads the visible-box lower-left from a pdf.js page view", () => {
+  assert.deepStrictEqual(pageBoxOrigin({ view: [36, 36, 576, 756] }), { x: 36, y: 36 });
+  assert.deepStrictEqual(pageBoxOrigin({ view: [0, 0, 612, 792] }), { x: 0, y: 0 });
+  assert.deepStrictEqual(pageBoxOrigin({ view: [72, 0, 540, 720] }), { x: 72, y: 0 });
+});

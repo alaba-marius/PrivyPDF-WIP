@@ -104,3 +104,48 @@ export function pageToScreenFromPage({ x, y, canvasRect, page }) {
   const rotation = ((page.baseRotation || 0) + (page.rotated || 0)) % 360;
   return pageToScreen({ x, y, canvasRect, pageW: page.width, pageH: page.height, rotation });
 }
+
+/**
+ * (right, down) unit vectors for each dir, in page space (origin bottom-left, y up).
+ *   right: direction the mark's length runs (visual rightward / baseline axis).
+ *   down : direction toward the visual bottom edge (the text-bottom side).
+ * Mirrors MARKUP_DIR_VECTORS in annotations.js so this module stays self-contained.
+ */
+const MARKUP_DIR_VECTORS = {
+  0:   { right: { x: 1, y: 0 }, down: { x: 0, y: -1 } },
+  90:  { right: { x: 0, y: 1 }, down: { x: 1, y: 0 } },
+  180: { right: { x: -1, y: 0 }, down: { x: 0, y: 1 } },
+  270: { right: { x: 0, y: -1 }, down: { x: -1, y: 0 } },
+};
+
+// Apply the linear part of visualToPage to a visual unit vector, returning the
+// resulting page-space unit vector. pageW/pageH only shift the translation,
+// which cancels in the difference, so any non-degenerate size works.
+function visualVectorToPage({ x: vx, y: vy }, pageW, pageH, rotation) {
+  const origin = visualToPage({ x: 0, y: 0 }, pageW, pageH, rotation);
+  const point = visualToPage({ x: vx, y: vy }, pageW, pageH, rotation);
+  return { x: point.x - origin.x, y: point.y - origin.y };
+}
+
+/**
+ * Direction (baseline axis) for a free-drag underline/strikethrough so the mark's
+ * length runs along visual rightward (the visual bottom edge) at every effective
+ * rotation. The dir is DERIVED from overlay.js visualToPage: map the visual
+ * rightward and visual downward unit vectors to page space, then match the
+ * (right, down) pair to the dir table — never assumed to equal the rotation.
+ * @param {number} effectiveRotation - Effective rotation (0, 90, 180, 270) clockwise
+ * @returns {number} The baseline direction to use for a free-drawn mark
+ */
+export function freeMarkDir(effectiveRotation) {
+  const rotation = ((effectiveRotation % 360) + 360) % 360;
+  const visualRight = visualVectorToPage({ x: 1, y: 0 }, 100, 100, rotation);
+  const visualDown = visualVectorToPage({ x: 0, y: -1 }, 100, 100, rotation);
+  for (const [dir, vec] of Object.entries(MARKUP_DIR_VECTORS)) {
+    const d = Number(dir);
+    if (vec.right.x === visualRight.x && vec.right.y === visualRight.y
+        && vec.down.x === visualDown.x && vec.down.y === visualDown.y) {
+      return d;
+    }
+  }
+  return rotation;
+}

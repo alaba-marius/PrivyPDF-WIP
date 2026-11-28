@@ -802,6 +802,37 @@ html { overflow: hidden; }
   outline-offset: 2px;
 }
 
+/* Inner drawn band of a markup annotation: the full box is the hit target,
+   the band is the visible underline/strikethrough line (or the box for highlight). */
+.annotate-highlight-band {
+  position: absolute;
+  border-radius: 0;
+  /* Highlight bands blend with the page content beneath them. isolation keeps
+     the multiply blend inside the band's own stacking context. */
+  mix-blend-mode: multiply;
+  isolation: isolate;
+}
+
+/* Quiet count button that toggles the annotation list. Low emphasis: no border
+   or background, subtle hover, expands to show the per-page count. */
+.annotate-annotation-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--color-graphite);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  text-align: left;
+  cursor: pointer;
+}
+.annotate-annotation-header:hover {
+  background: var(--color-surface-muted);
+}
+
 /* Highlight preview while dragging */
 .annotate-highlight-preview {
   position: absolute;
@@ -940,6 +971,40 @@ html { overflow: hidden; }
   outline-offset: 2px;
 }
 
+/* Markup color swatches (5 dots for Highlight/Underline/Strikethrough) */
+.annotate-markup-colors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-8);
+  align-items: center;
+}
+
+.annotate-markup-colors .ds-color-swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--color-border-input);
+  cursor: pointer;
+  padding: 0;
+}
+
+.annotate-markup-colors .ds-color-swatch[aria-checked="true"] {
+  outline: 2px solid var(--color-graphite);
+  outline-offset: 2px;
+}
+
+.annotate-markup-colors .ds-color-swatch:focus-visible {
+  outline: 2px solid var(--color-graphite);
+  outline-offset: 2px;
+}
+
+/* Thickness / opacity field layout in the annotate panel */
+.annotate-thickness-field .ds-input[type="range"],
+.annotate-opacity-field .ds-input[type="range"] {
+  flex: 1;
+  min-width: 120px;
+}
+
 /* Right panel Annotate section */
 .annotate-panel-section {
   /* Uses ds-panel-section padding and stack gap from theme.css */
@@ -1010,6 +1075,54 @@ html { overflow: hidden; }
   font-size: var(--text-caption);
   color: var(--color-soft-charcoal);
   white-space: nowrap;
+}
+
+/* Annotate panel groups — exactly one visible at a time */
+.annotate-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-8);
+}
+
+.annotate-group-label {
+  font-weight: 600;
+  font-size: var(--text-caption);
+  letter-spacing: var(--tracking-caption);
+  text-transform: uppercase;
+  color: var(--color-soft-charcoal);
+}
+
+.annotate-empty {
+  font-size: var(--text-body-small);
+  color: var(--color-soft-charcoal);
+  font-style: italic;
+}
+
+/* Markup color dots — backgrounds filled via data-color / CSSOM from panel.js */
+.annotate-color-dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--color-border-input);
+  cursor: pointer;
+  padding: 0;
+}
+
+.annotate-color-dot[aria-checked="true"] {
+  outline: 2px solid var(--color-graphite);
+  outline-offset: 2px;
+}
+
+.annotate-color-dot:focus-visible {
+  outline: 2px solid var(--color-graphite);
+  outline-offset: 2px;
+}
+
+/* Image group actions */
+.annotate-image-actions {
+  display: flex;
+  gap: var(--spacing-8);
+  align-items: center;
 }
 
 /* Responsive: narrow viewports */

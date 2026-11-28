@@ -3,6 +3,7 @@
 // bundle the first time someone exports.
 import { formatPageNumber, placeLabel, validateWatermark, watermarkPlacement, watermarkAutoSize, DEFAULT_MARGIN } from "./overlay.js";
 import { getAsset } from "./image-assets.js";
+import { markupLineRect, DEFAULT_HIGHLIGHT_OPACITY } from "./annotations.js";
 
 const PDFLIB_URL = "/vendor/pdf-lib/pdf-lib.esm.min.js";
 
@@ -50,9 +51,30 @@ export function createExporter({ PDFLib } = {}) {
     );
   }
 
+  // Visible-box origin (CropBox ∩ MediaBox lower-left) of an output page, in
+  // pdf-lib user space. pdf-lib reports MediaBox/CropBox as {x, y, width, height};
+  // getCropBox falls back to the MediaBox when the page has no CropBox, so
+  // image-source pages (MediaBox [0, 0, w, h]) yield {0, 0} naturally.
+  // Computed once per output page in the export loop — store pages never carry
+  // a visible-box origin, so the store record is never consulted here.
+  function outputPageOrigin(outPage) {
+    const media = outPage.getMediaBox() ?? { x: 0, y: 0 };
+    const crop = outPage.getCropBox() ?? media;
+    return {
+      x: Math.max(media.x, crop.x),
+      y: Math.max(media.y, crop.y),
+    };
+  }
+
   // Draw text annotations on a page
-  async function drawAnnotations(outPage, annotations, pageW, pageH, effectiveRotation, rgb, fontCache, degrees, assetCache) {
+  async function drawAnnotations(outPage, annotations, pageW, pageH, effectiveRotation, rgb, fontCache, degrees, assetCache, origin, BlendMode) {
     if (!annotations || !annotations.length) return;
+
+    // Page-space (visible-box origin) → pdf-lib user space: shift by the
+    // visible-box origin of the output page. Computed once in the export loop
+    // — the single conversion point for every pdf-lib draw call below.
+    const pageX = (x) => x + origin.x;
+    const pageY = (y) => y + origin.y;
 
     // Load Helvetica font for annotations (shared with page numbers)
     if (!fontCache.Helvetica) {
@@ -93,8 +115,8 @@ export function createExporter({ PDFLib } = {}) {
           const dy = Number((-k * lineHeight * cos).toFixed(3));
 
           outPage.drawText(line, {
-            x: ann.x + dx,
-            y: ann.y + dy,
+            x: pageX(ann.x + dx),
+            y: pageY(ann.y + dy),
             size: fontSize,
             font,
             color: textColor,
@@ -102,26 +124,34 @@ export function createExporter({ PDFLib } = {}) {
           });
         }
       } else if (ann.type === "highlight") {
-        // Highlight: stored in page space (x, y, width, height).
+        // Highlight / underline / strikethrough: stored in page space (x, y, width, height).
         // pdf-lib drawRectangle works in page space - use stored values directly.
-        // NO coordinate conversion needed.
-        const x = ann.x || 0;
-        const y = ann.y || 0;
-        const width = ann.width || 0;
-        const height = ann.height || 0;
+        // NO coordinate conversion needed. Highlight draws the box itself;
+        // underline/strikethrough draw a band via markupLineRect.
+        const drawRect = markupLineRect(ann);
+        const x = drawRect.x;
+        const y = drawRect.y;
+        const width = drawRect.width;
+        const height = drawRect.height;
         if (width <= 0 || height <= 0) continue;
 
         const highlightColor = ann.color ? hexToRgb(rgb, ann.color) : rgb(1, 0.88, 0.3); // default yellow
-        const opacity = Math.max(0, Math.min(1, ann.opacity ?? 0.4));
+        const opacity = Math.max(0, Math.min(1, ann.opacity ?? DEFAULT_HIGHLIGHT_OPACITY));
 
-        outPage.drawRectangle({
-          x,
-          y,
+        const rectOpts = {
+          x: pageX(x),
+          y: pageY(y),
           width,
           height,
           color: highlightColor,
           opacity,
-        });
+        };
+        // Highlight bands blend with the page content beneath them so
+        // overlapping marks and the underlying text stay legible.
+        if (ann.style === "highlight") {
+          rectOpts.blendMode = BlendMode.Multiply;
+        }
+        outPage.drawRectangle(rectOpts);
       } else if (ann.type === "image") {
         // Image annotation: stored in page space (x, y, width, height).
         // pdf-lib drawImage rotates COUNTERCLOCKWISE about its draw origin
@@ -173,8 +203,8 @@ export function createExporter({ PDFLib } = {}) {
         }
 
         outPage.drawImage(embed, {
-          x: drawX,
-          y: drawY,
+          x: pageX(drawX),
+          y: pageY(drawY),
           width: drawW,
           height: drawH,
           rotate: degrees(r),
@@ -192,7 +222,7 @@ export function createExporter({ PDFLib } = {}) {
     annotations = {}, // pageId -> annotations[]
   } = {}) {
     const lib = await getPDFLib();
-    const { PDFDocument, degrees, StandardFonts, rgb } = lib;
+    const { PDFDocument, degrees, StandardFonts, rgb, BlendMode } = lib;
     const color = watermarkColor(rgb, watermark.color);
 
     // getSource is keyed by source id and returns { kind, bytes, type, width, height }.
@@ -246,6 +276,12 @@ export function createExporter({ PDFLib } = {}) {
       const pageW = outPage.getWidth();
       const pageH = outPage.getHeight();
 
+      // Visible-box origin of this output page (CropBox ∩ MediaBox lower-left)
+      // in pdf-lib user space. Page numbers, watermarks and annotations share
+      // the same origin, so every mark lands relative to the visible box —
+      // never at the raw MediaBox corner — and nothing is compensated twice.
+      const origin = outputPageOrigin(outPage);
+
       // --- Page numbers -----------------------------------------------------
       // n counts within the exported document; skipFirst skips the first
       // exported page. "applyTo" controls whether page numbers apply to all
@@ -267,7 +303,7 @@ export function createExporter({ PDFLib } = {}) {
             visualAngle: 0, // labels are always upright
           });
           outPage.drawText(text, {
-            x, y, size: fontSize, font: pageNumberFont,
+            x: x + origin.x, y: y + origin.y, size: fontSize, font: pageNumberFont,
             color: pageNumberColor, rotate: degrees(rotateDegrees),
           });
         }
@@ -303,7 +339,7 @@ export function createExporter({ PDFLib } = {}) {
           fontSize: size, textWidth,
         });
         outPage.drawText(watermark.text, {
-          x, y, size, font: watermarkFont,
+          x: x + origin.x, y: y + origin.y, size, font: watermarkFont,
           color, opacity: Math.max(0, Math.min(100, Number(watermark.opacity) || 30)) / 100,
           rotate: degrees(rotateDegrees),
         });
@@ -311,7 +347,7 @@ export function createExporter({ PDFLib } = {}) {
 
       // --- Annotations ------------------------------------------------------
       const pageAnnotations = annotations[page.id] || [];
-      await drawAnnotations(outPage, pageAnnotations, pageW, pageH, effectiveRotation, rgb, fontCache, degrees, assetCache);
+      await drawAnnotations(outPage, pageAnnotations, pageW, pageH, effectiveRotation, rgb, fontCache, degrees, assetCache, origin, BlendMode);
 
       processed++;
       // Yield to the main thread every few pages so long exports stay

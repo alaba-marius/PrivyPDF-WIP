@@ -151,7 +151,7 @@ async function createTestPDF(width = 612, height = 792, baseRotation = 0) {
 
 // Helper to run export with annotations
 async function runExport(pages, annotations, options = {}) {
-  const exporter = createExporter({ PDFLib: { PDFDocument, degrees, StandardFonts, rgb } });
+  const exporter = createExporter({ PDFLib: { PDFDocument, degrees, StandardFonts, rgb, BlendMode: { Multiply: "Multiply" } } });
   const getSource = (sourceId) => {
     const source = pages.find(p => p.sourceId === sourceId);
     if (!source) return null;

@@ -1,0 +1,13 @@
+// Project tasks configuration. See https://zed.dev/docs/tasks for documentation.
+//
+// Example:
+[
+  {
+    "label": "Live Server",
+    "command": "live-server",
+    "args": [".", "--port", "5500"],
+    "use_new_terminal": true,
+    "reveal": "always",
+    "save": "all"
+  },
+]

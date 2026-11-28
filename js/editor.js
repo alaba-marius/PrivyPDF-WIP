@@ -122,6 +122,14 @@ const store = createStore(
     annotateTextColor: "#000000",
     annotateHighlightColor: "#ffe14d",
     annotateHighlightOpacity: 0.4,
+    // Markup tool: active style and per-style color memory
+    annotateMarkupStyle: "highlight",
+    annotateMarkupUnderlineColor: "#d92d20",
+    annotateMarkupUnderlineOpacity: 1,
+    annotateMarkupUnderlineThickness: 1.5,
+    annotateMarkupStrikethroughColor: "#d92d20",
+    annotateMarkupStrikethroughOpacity: 1,
+    annotateMarkupStrikethroughThickness: 1.5,
   },
   { track: ["pages", "annotations"] },
 );
